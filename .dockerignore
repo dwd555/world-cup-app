@@ -1,0 +1,55 @@
+# 依赖
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 构建输出
+.next
+dist
+build
+
+# 开发环境
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 编辑器
+.vscode
+.idea
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 日志
+logs
+*.log
+
+# 测试
+coverage
+.nyc_output
+
+# Prisma（未使用）
+prisma
+prisma.config.ts
+
+# 不需要部署的文件
+README.md
+CLAUDE.md
+AGENTS.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+DEPLOY.md
+deploy.sh
+
+# 数据文件（由宿主机挂载）
+data
+dev.db
+dev.db-shm
+dev.db-wal

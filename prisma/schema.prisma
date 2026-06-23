@@ -1,0 +1,23 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Bet {
+  id          Int      @id @default(autoincrement())
+  match       String   // 比赛名称/描述，如 "巴西 vs 阿根廷"
+  betAmount   Float    // 投注金额
+  odds        Float    // 赔率
+  result      String   @default("pending") // 结果: "win" | "loss" | "pending"
+  profit      Float?   // 盈利（自动计算）
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
