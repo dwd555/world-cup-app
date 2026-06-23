@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
-// 内存缓存：有进行中的比赛时缓存30秒，否则5分钟
+// 内存缓存：有进行中的比赛时缓存30秒，否则1分钟
 let cache: { data: Match[]; timestamp: number; hasLive: boolean } | null = null;
 const CACHE_TTL_LIVE = 30 * 1000;       // 30秒（有实时比赛）
-const CACHE_TTL_NORMAL = 5 * 60 * 1000; // 5分钟（无实时比赛）
+const CACHE_TTL_NORMAL = 1 * 60 * 1000; // 1分钟（无实时比赛）
 
 export interface Match {
   id: string;

@@ -1,50 +1,55 @@
-# 阶段一：构建
+# Stage 1: Build
 FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# 安装 better-sqlite3 编译依赖（glibc 版本，兼容性更好）
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3 \
-        make \
-        g++ \
-        sqlite3 \
-        libsqlite3-dev && \
-    rm -rf /var/lib/apt/lists/*
+# Install build tools for better-sqlite3 (node-gyp)
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖文件并安装
-COPY package.json package-lock.json ./
-RUN npm ci
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm install
 
-# 复制项目源码
+# Copy source
 COPY . .
 
-# 构建 Next.js（standalone 模式）
+# Build Next.js standalone output
 RUN npm run build
 
-# 阶段二：运行
+# Stage 2: Production
 FROM node:22-slim AS runner
 
 WORKDIR /app
 
+# Install runtime tools needed by better-sqlite3 and tesseract.js
+RUN apt-get update && apt-get install -y libsqlite3-dev && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV DATABASE_PATH=/app/data/dev.db
+ENV HOSTNAME=0.0.0.0
 
-# 安装 SQLite 运行时库（better-sqlite3 需要）
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        sqlite3 \
-        libsqlite3-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# 创建数据目录
+# Create data directory for SQLite (persistent volume mount point)
 RUN mkdir -p /app/data
 
-# 复制 standalone 构建产物
+# Copy standalone build output
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+# Copy language files for tesseract.js (needed for OCR)
+COPY --from=builder /app/node_modules/tesseract.js ./node_modules/tesseract.js
+COPY --from=builder /app/node_modules/tesseract.js-core ./node_modules/tesseract.js-core
+COPY --from=builder /app/node_modules/worker-loader ./node_modules/worker-loader
+COPY --from=builder /app/node_modules/resolve-url ./node_modules/resolve-url
+
+# Ensure tesseract.js can find its trained data
+COPY --from=builder /app/node_modules/tesseract.js/dist/worker.min.js ./node_modules/tesseract.js/dist/worker.min.js
+COPY --from=builder /app/node_modules/tesseract.js/dist/createWorker.js ./node_modules/tesseract.js/dist/createWorker.js
+COPY --from=builder /app/node_modules/tesseract.js/dist/index.js ./node_modules/tesseract.js/dist/index.js
+COPY --from=builder /app/node_modules/tesseract.js/dist/internal.js ./node_modules/tesseract.js/dist/internal.js
+COPY --from=builder /app/node_modules/tesseract.js/dist/constants/*.js ./node_modules/tesseract.js/dist/constants/
+COPY --from=builder /app/node_modules/tesseract.js/dist/utils/*.js ./node_modules/tesseract.js/dist/utils/
+COPY --from=builder /app/node_modules/tesseract.js/dist/worker-script/*.js ./node_modules/tesseract.js/dist/worker-script/
 
 EXPOSE 3000
 

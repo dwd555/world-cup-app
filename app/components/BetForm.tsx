@@ -12,7 +12,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Plus, Search, RefreshCw, Trophy, Clock, CheckCircle, TrendingUp } from "lucide-react";
+import { Plus, Search, RefreshCw, Trophy, Clock, CheckCircle, TrendingUp, Camera, Loader2, ImageIcon, X, Wand2 } from "lucide-react";
+import Tesseract from "tesseract.js";
 
 interface Match {
   id: string;
@@ -66,6 +67,20 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
   // 赔率相关
   const [oddsMap, setOddsMap] = useState<Map<string, OddsEntry>>(new Map());
   const [matchOdds, setMatchOdds] = useState<OddsEntry | null>(null);
+
+  // OCR 图片识别相关
+  const [ocrImage, setOcrImage] = useState<string | null>(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrRawText, setOcrRawText] = useState("");
+  const [ocrParsed, setOcrParsed] = useState<{
+    match?: string;
+    betAmount?: number;
+    winAmount?: number;
+    odds?: number;
+    betOption?: string;
+  } | null>(null);
+  const [showOcrPanel, setShowOcrPanel] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 当弹窗打开时拉取赛程和赔率
   useEffect(() => {
@@ -167,6 +182,201 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
     }
   };
 
+  // ===================== OCR 图片识别 =====================
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("请选择图片文件");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setOcrImage(reader.result as string);
+      setShowOcrPanel(true);
+      runOCR(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+    // 清空 input 以便可重复选择同一文件
+    e.target.value = "";
+  };
+
+  const runOCR = async (imageBase64: string) => {
+    setOcrLoading(true);
+    setOcrRawText("");
+    setOcrParsed(null);
+    try {
+      const result = await Tesseract.recognize(
+        imageBase64,
+        "chi_sim+eng",
+        {
+          logger: (m: any) => {
+            if (m.status === "recognizing text") {
+              // 可选进度
+            }
+          },
+        }
+      );
+      const text = result.data.text;
+      setOcrRawText(text);
+      const parsed = parseBetText(text);
+      setOcrParsed(parsed);
+      if (parsed) {
+        toast.success("识别成功！请核对后点击应用");
+      } else {
+        toast.warning("未能提取完整投注信息，请手动填写");
+      }
+    } catch (err: any) {
+      toast.error("图片识别失败: " + (err?.message || "未知错误"));
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  // 解析 OCR 文本提取投注信息
+  const parseBetText = (text: string) => {
+    const result: { match?: string; betAmount?: number; winAmount?: number; odds?: number; betOption?: string } = {};
+
+    // 1. 比赛名称：找 "VS" / "vs" / "对" 前后的队伍
+    const matchPatterns = [
+      /([\u4e00-\u9fa5]{2,10})\s*[VSvs]{2}\s*([\u4e00-\u9fa5]{2,10})/,
+      /([\u4e00-\u9fa5]{2,10})\s*对\s*([\u4e00-\u9fa5]{2,10})/,
+    ];
+    for (const p of matchPatterns) {
+      const m = text.match(p);
+      if (m) {
+        result.match = `${m[1]} VS ${m[2]}`;
+        break;
+      }
+    }
+
+    // 2. 投注额："投注额" / "投注金额" / "下注" 后面的数字
+    const amountPatterns = [
+      /投注额[\s:：]*([\d,]+\.?\d*)\s*[元￥]/i,
+      /投注金额[\s:：]*([\d,]+\.?\d*)\s*[元￥]/i,
+      /下注[\s:：]*([\d,]+\.?\d*)\s*[元￥]/i,
+      /投注额[\s:：]*([\d,]+\.?\d*)/i,
+      /([\d,]+\.?\d*)\s*元\s*.*?(?:投注|下注)/i,
+    ];
+    for (const p of amountPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const val = parseFloat(m[1].replace(/,/g, ""));
+        if (!isNaN(val) && val > 0) {
+          result.betAmount = val;
+          break;
+        }
+      }
+    }
+
+    // 3. 赔率："@数字" 或 "赔率" 后面的数字
+    const oddsPatterns = [
+      /@[\s:：]*([\d.]+)/,
+      /赔率[\s:：]*([\d.]+)/i,
+      /([\d.]+)\s*赔率/i,
+    ];
+    for (const p of oddsPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const val = parseFloat(m[1]);
+        if (!isNaN(val) && val > 1) {
+          result.odds = val;
+          break;
+        }
+      }
+    }
+
+    // 4. 可赢金额 / 结算金额："赢" / "结算" 后面的数字
+    const winPatterns = [
+      /赢[\s:：]*([\d,]+\.?\d*)\s*[元￥]/i,
+      /结算[\s:：]*([\d,]+\.?\d*)\s*[元￥]/i,
+      /赢[\s:：]*\+?([\d,]+\.?\d*)/i,
+      /([\d,]+\.?\d*)\s*元\s*赢/i,
+    ];
+    for (const p of winPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const val = parseFloat(m[1].replace(/,/g, ""));
+        if (!isNaN(val) && val > 0) {
+          result.winAmount = val;
+          break;
+        }
+      }
+    }
+
+    // 5. 投注项：找 "全场独赢" / "让球" / "大小球" 等，以及队伍名
+    const optionPatterns = [
+      /全场独赢[\s:：]*([\u4e00-\u9fa5]{2,10})/i,
+      /独赢[\s:：]*([\u4e00-\u9fa5]{2,10})/i,
+      /让球[\s:：]*([\u4e00-\u9fa5]{2,10})/i,
+      /大小球[\s:：]*([\u4e00-\u9fa5]{2,10})/i,
+    ];
+    for (const p of optionPatterns) {
+      const m = text.match(p);
+      if (m) {
+        result.betOption = m[1];
+        break;
+      }
+    }
+
+    // 如果没有投注项，但有比赛和赔率，尝试从 "@赔率" 前面找队伍名
+    if (!result.betOption && result.odds) {
+      const oddsAtPattern = new RegExp(`([\\u4e00-\\u9fa5]{2,10})\\s*@\\s*${result.odds}`);
+      const m = text.match(oddsAtPattern);
+      if (m) {
+        result.betOption = m[1];
+      }
+    }
+
+    // 6. 如果既没有 winAmount 也没有 odds，但有 betAmount 和 odds，计算 winAmount
+    if (!result.winAmount && result.odds && result.betAmount) {
+      result.winAmount = parseFloat(((result.odds - 1) * result.betAmount).toFixed(2));
+    }
+    // 反过来，如果有 betAmount 和 winAmount，但没有 odds，计算 odds
+    if (!result.odds && result.betAmount && result.winAmount && result.betAmount > 0) {
+      result.odds = parseFloat(((result.betAmount + result.winAmount) / result.betAmount).toFixed(2));
+    }
+
+    return Object.keys(result).length > 0 ? result : null;
+  };
+
+  const applyOcrResult = () => {
+    if (!ocrParsed) return;
+    if (ocrParsed.match) {
+      setMatch(ocrParsed.match);
+      setMatchSearch(ocrParsed.match);
+      // 尝试匹配赛程
+      const q = ocrParsed.match.toLowerCase();
+      const found = matches.find((m) =>
+        m.displayName.toLowerCase().includes(q) ||
+        m.homeTeam.toLowerCase().includes(q) ||
+        m.awayTeam.toLowerCase().includes(q)
+      );
+      if (found) {
+        setSelectedMatch(found);
+        const o = oddsMap.get(`${found.homeTeamEn}__${found.awayTeamEn}`) ?? null;
+        setMatchOdds(o);
+      } else {
+        setSelectedMatch(null);
+      }
+    }
+    if (ocrParsed.betAmount) setBetAmount(ocrParsed.betAmount.toString());
+    if (ocrParsed.winAmount) setWinAmount(ocrParsed.winAmount.toString());
+    if (ocrParsed.betOption) setBetOption(ocrParsed.betOption);
+    setShowOcrPanel(false);
+    toast.success("已自动填充识别结果");
+  };
+
+  const clearOcr = () => {
+    setOcrImage(null);
+    setOcrRawText("");
+    setOcrParsed(null);
+    setShowOcrPanel(false);
+  };
+
+  // ===================== /OCR 图片识别 =====================
+
   // 快选投注项（根据选定的比赛生成）
   const quickBetOptions = selectedMatch
     ? [
@@ -253,9 +463,107 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
       </DialogTrigger>
       <DialogContent className="sm:max-w-[480px] max-w-[94vw] rounded-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>新增投注记录</DialogTitle>
+          <DialogTitle className="flex items-center justify-between">
+            <span>新增投注记录</span>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 transition-all shadow-sm"
+            >
+              <Camera className="h-3.5 w-3.5" />
+              图片识别
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleImageSelect}
+            />
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+
+          {/* OCR 图片识别面板 */}
+          {showOcrPanel && (
+            <div className="border border-indigo-200 rounded-lg bg-indigo-50/50 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-sm font-medium text-indigo-700">
+                  <Wand2 className="h-4 w-4" />
+                  图片识别结果
+                </div>
+                <button type="button" onClick={clearOcr} className="text-gray-400 hover:text-gray-600">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {ocrImage && (
+                <div className="relative">
+                  <img
+                    src={ocrImage}
+                    alt="投注单"
+                    className="max-h-40 w-auto mx-auto rounded border border-indigo-200 object-contain"
+                  />
+                </div>
+              )}
+
+              {ocrLoading ? (
+                <div className="flex items-center gap-2 text-sm text-indigo-600 py-4 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在识别图片中的文字...
+                </div>
+              ) : ocrParsed ? (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    {ocrParsed.match && (
+                      <div className="bg-white rounded px-2.5 py-1.5 border border-indigo-100">
+                        <span className="text-gray-400 text-xs">比赛</span>
+                        <div className="font-medium text-gray-800 truncate">{ocrParsed.match}</div>
+                      </div>
+                    )}
+                    {ocrParsed.betOption && (
+                      <div className="bg-white rounded px-2.5 py-1.5 border border-indigo-100">
+                        <span className="text-gray-400 text-xs">投注项</span>
+                        <div className="font-medium text-gray-800 truncate">{ocrParsed.betOption}</div>
+                      </div>
+                    )}
+                    {ocrParsed.betAmount !== undefined && (
+                      <div className="bg-white rounded px-2.5 py-1.5 border border-indigo-100">
+                        <span className="text-gray-400 text-xs">投注额</span>
+                        <div className="font-medium text-gray-800">¥{ocrParsed.betAmount.toFixed(2)}</div>
+                      </div>
+                    )}
+                    {ocrParsed.winAmount !== undefined && (
+                      <div className="bg-white rounded px-2.5 py-1.5 border border-indigo-100">
+                        <span className="text-gray-400 text-xs">可赢金额</span>
+                        <div className="font-medium text-green-600">¥{ocrParsed.winAmount.toFixed(2)}</div>
+                      </div>
+                    )}
+                    {ocrParsed.odds !== undefined && (
+                      <div className="bg-white rounded px-2.5 py-1.5 border border-indigo-100">
+                        <span className="text-gray-400 text-xs">赔率</span>
+                        <div className="font-medium text-gray-800">{ocrParsed.odds.toFixed(2)}</div>
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={applyOcrResult}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    <ImageIcon className="h-4 w-4 mr-1.5" />
+                    应用识别结果
+                  </Button>
+                </div>
+              ) : ocrRawText ? (
+                <div className="text-sm text-gray-500">
+                  <p className="mb-1">未能提取完整信息，原始文字：</p>
+                  <pre className="bg-white rounded border border-indigo-100 p-2 text-xs text-gray-400 whitespace-pre-wrap max-h-24 overflow-y-auto">{ocrRawText}</pre>
+                </div>
+              ) : null}
+            </div>
+          )}
+
           {/* 用户选择 */}
           <div className="space-y-2">
             <Label htmlFor="user">用户</Label>

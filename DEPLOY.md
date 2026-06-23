@@ -1,158 +1,182 @@
-# 足球投注系统 - 部署指南
+# 部署指南
 
-## 前置要求
-
-- 一台可以安装 Docker 的服务器（Linux 服务器、Windows Server、Mac 均可）
-- **服务器上不需要安装 Node.js**，Docker 容器内部自带
-
----
-
-## 推荐方案：Docker Compose（一键部署）
-
-### 步骤
-
-#### 1. 安装 Docker 和 Docker Compose
+## 1. 服务器环境准备
 
 ```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install docker.io docker-compose-plugin
-
-# CentOS/RHEL
-sudo yum install docker docker-compose-plugin
-sudo systemctl start docker
-sudo systemctl enable docker
+# 安装 Docker 和 docker-compose（如果还没有）
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# 重新登录后生效
 ```
 
-#### 2. 上传项目到服务器
-
-将 `world-cup-app` 文件夹上传到服务器任意目录，例如：
-```
-/home/user/world-cup-app/
-```
-
-#### 3. 一键部署
+## 2. 项目上传到服务器
 
 ```bash
-cd /home/user/world-cup-app
-chmod +x deploy.sh
-./deploy.sh
+# 在本地打包
+zip -r world-cup-app.zip world-cup-app -x "*/node_modules/*" "*/.next/*" "*/.git/*"
+
+# 上传到服务器（示例）
+scp world-cup-app.zip user@your-server-ip:/home/user/
+
+# 在服务器上解压
+unzip world-cup-app.zip -d /opt/
+cd /opt/world-cup-app
 ```
 
-或手动执行：
+## 3. 创建数据目录和配置
+
 ```bash
-cd /home/user/world-cup-app
+cd /opt/world-cup-app
+
+# 创建 SQLite 数据库目录（重要！持久化数据）
 mkdir -p data
-docker compose build --no-cache
+
+# 配置环境变量（可选）
+echo "ODDS_API_KEY=your_api_key_here" > .env.local
+
+# 如果已有数据库需要迁移，复制到 data 目录
+# cp /path/to/old/dev.db ./data/dev.db
+```
+
+## 4. 构建并运行
+
+```bash
+# 构建并启动（后台运行）
+docker compose up -d --build
+
+# 查看日志
+docker compose logs -f app
+
+# 查看状态
+docker compose ps
+```
+
+## 5. 检查是否运行正常
+
+```bash
+# 测试本地访问
+curl http://localhost:3000/api/matches
+curl http://localhost:3000/api/bets
+```
+
+## 6. Nginx 配置（可选，用于域名 + SSL）
+
+### 方案 A：用 docker-compose 一起启动 Nginx
+
+编辑 `docker-compose.yml`，取消 `nginx` 服务的注释：
+
+```yaml
+  nginx:
+    image: nginx:alpine
+    container_name: world-cup-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - app
+    networks:
+      - app-network
+```
+
+```bash
+# 重启
 docker compose up -d
 ```
 
-#### 4. 访问应用
+### 方案 B：服务器原生 Nginx（推荐，性能好）
 
-```
-http://服务器IP:3000
-```
-
-服务器 IP 可通过以下命令获取：
 ```bash
-ip addr | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1
+# 安装 Nginx
+sudo apt update && sudo apt install -y nginx
+
+# 复制配置文件
+sudo cp nginx.conf /etc/nginx/nginx.conf
+# 或单独配置 sites-enabled
+sudo cp nginx.conf /etc/nginx/sites-available/world-cup-app
+sudo ln -s /etc/nginx/sites-available/world-cup-app /etc/nginx/sites-enabled/
+
+# 测试配置
+sudo nginx -t
+
+# 重启 Nginx
+sudo systemctl restart nginx
+
+# 设置开机自启
+sudo systemctl enable nginx
 ```
 
----
+## 7. SSL 证书（HTTPS）
 
-## 数据持久化
+```bash
+# 安装 certbot
+sudo apt install -y certbot python3-certbot-nginx
 
-- 数据库文件保存在 `./data/dev.db`（宿主机目录）
-- 即使删除容器、重建镜像，数据也不会丢失
-- 首次部署时如果没有数据，会自动创建空数据库
-- **备份**：直接复制 `./data/dev.db` 文件即可
-- **恢复**：将备份文件覆盖 `./data/dev.db`
+# 申请证书（替换为你的域名）
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
 
----
+# 自动续期
+sudo certbot renew --dry-run
+```
 
-## 常用命令
+## 8. 常用运维命令
 
 ```bash
 # 查看日志
-docker compose logs -f
+docker compose logs -f app
 
-# 停止服务
-docker compose stop
+# 重启应用
+docker compose restart app
 
-# 启动服务
-docker compose start
+# 重新构建（代码更新后）
+docker compose up -d --build app
 
-# 重启服务
-docker compose restart
+# 备份数据库
+cp data/dev.db data/dev.db.backup.$(date +%Y%m%d)
 
-# 查看运行状态
+# 进入容器
+docker exec -it world-cup-app sh
+
+# 查看数据库
+docker exec -it world-cup-app sh -c "sqlite3 /app/data/dev.db '.tables'"
+
+# 停止
+docker compose down
+
+# 停止并删除数据卷（慎用！）
+docker compose down -v
+```
+
+## 9. 更新部署（代码更新后）
+
+```bash
+cd /opt/world-cup-app
+
+# 备份数据库
+mkdir -p backups
+cp data/dev.db backups/dev.db.$(date +%Y%m%d_%H%M%S)
+
+# 拉取新代码（git 方式）
+git pull
+# 或重新上传代码后
+
+# 重新构建并启动
+docker compose up -d --build
+
+# 确认正常
 docker compose ps
-
-# 停止并删除容器（数据保留在 ./data）
-docker compose down
-
-# 更新版本（拉取最新代码后执行）
-docker compose down
-docker compose build --no-cache
-docker compose up -d
+curl -s http://localhost:3000/api/matches | head -c 100
 ```
 
----
+## 10. 防火墙配置（如有需要）
 
-## 修改端口
-
-编辑 `docker-compose.yml`：
-```yaml
-ports:
-  - "8080:3000"    # 将 8080 改为任意端口
+```bash
+# 仅开放 80/443
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+# 如果不用 Nginx，直接暴露 3000
+sudo ufw allow 3000/tcp
 ```
-
----
-
-## 配置 Nginx 反向代理（可选）
-
-如需使用域名和 HTTPS，在服务器上安装 Nginx：
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
----
-
-## 技术细节
-
-- **基础镜像**: `node:22-slim`（Debian 基础，glibc 兼容性更好，比 Alpine 更适合 better-sqlite3）
-- **构建模式**: Next.js Standalone，只打包运行所需文件，镜像更小
-- **数据库路径**: 容器内 `/app/data/dev.db`，通过环境变量 `DATABASE_PATH` 配置
-- **卷挂载**: 宿主机 `./data` 目录挂载到容器 `/app/data`
-
----
-
-## 常见问题
-
-**Q: 服务器没有 Docker 怎么办？**
-A: 可以直接安装 Docker，参考 https://docs.docker.com/get-docker/ 。大多数云服务器（阿里云、腾讯云、AWS）都支持一键安装 Docker。
-
-**Q: 数据会丢失吗？**
-A: 不会。数据库文件通过 Docker 卷挂载持久化在宿主机 `./data` 目录，删除容器数据仍在。
-
-**Q: 如何迁移到另一台服务器？**
-A: 复制整个项目文件夹 + `./data/dev.db` 到新服务器，重新执行 `docker compose up -d` 即可。
-
-**Q: 能否部署到 Vercel / Netlify？**
-A: 不能直接部署，因为 SQLite 文件数据库不适合 Serverless 环境。如需云部署，需将数据库改为 PostgreSQL / MySQL。
-
-**Q: 部署后没有数据？**
-A: 首次部署时自动创建空数据库。如需迁移现有数据，在部署前将 `dev.db` 复制到 `./data/dev.db`。
