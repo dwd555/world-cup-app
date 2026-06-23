@@ -12,12 +12,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Plus, Search, RefreshCw, Trophy, Clock, CheckCircle } from "lucide-react";
+import { Plus, Search, RefreshCw, Trophy, Clock, CheckCircle, TrendingUp } from "lucide-react";
 
 interface Match {
   id: string;
   homeTeam: string;
   awayTeam: string;
+  homeTeamEn: string;
+  awayTeamEn: string;
   homeScore: string | null;
   awayScore: string | null;
   date: string;
@@ -26,6 +28,16 @@ interface Match {
   finished: boolean;
   timeElapsed: string;
   displayName: string;
+}
+
+interface OddsEntry {
+  matchKey: string;
+  homeTeamEn: string;
+  awayTeamEn: string;
+  home: number | null;
+  draw: number | null;
+  away: number | null;
+  bookmaker: string;
 }
 
 interface BetFormProps {
@@ -51,10 +63,15 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
   const [showMatchDropdown, setShowMatchDropdown] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
-  // 当弹窗打开时拉取赛程
+  // 赔率相关
+  const [oddsMap, setOddsMap] = useState<Map<string, OddsEntry>>(new Map());
+  const [matchOdds, setMatchOdds] = useState<OddsEntry | null>(null);
+
+  // 当弹窗打开时拉取赛程和赔率
   useEffect(() => {
     if (open) {
       fetchMatches();
+      fetchOdds();
     }
   }, [open]);
 
@@ -88,6 +105,29 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
     }
   };
 
+  const fetchOdds = async () => {
+    try {
+      const res = await fetch("/api/odds");
+      if (!res.ok) return;
+      const data: OddsEntry[] = await res.json();
+      const map = new Map<string, OddsEntry>();
+      for (const o of data) {
+        map.set(`${o.homeTeamEn}__${o.awayTeamEn}`, o);
+        // 反向索引（主客颠倒）
+        map.set(`${o.awayTeamEn}__${o.homeTeamEn}`, {
+          ...o,
+          homeTeamEn: o.awayTeamEn,
+          awayTeamEn: o.homeTeamEn,
+          home: o.away,
+          away: o.home,
+        });
+      }
+      setOddsMap(map);
+    } catch {
+      // 静默失败，赔率只是参考
+    }
+  };
+
   const filteredMatches = matches.filter((m) => {
     // 过滤掉已结束的比赛
     if (m.finished) return false;
@@ -107,6 +147,24 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
     setMatchSearch(m.displayName);
     setBetOption(""); // 重置投注项
     setShowMatchDropdown(false);
+    // 查找该比赛的赔率
+    const o = oddsMap.get(`${m.homeTeamEn}__${m.awayTeamEn}`) ?? null;
+    setMatchOdds(o);
+  };
+
+  // 点击赔率快填可赢金额
+  const applyOddsToWinAmount = (oddsValue: number) => {
+    const bet = parseFloat(betAmount);
+    if (!isNaN(bet) && bet > 0) {
+      // winAmount = bet * (odds - 1)
+      const win = (bet * (oddsValue - 1)).toFixed(2);
+      setWinAmount(win);
+    } else {
+      // 没填投注额，先设默认100
+      setBetAmount("100");
+      const win = (100 * (oddsValue - 1)).toFixed(2);
+      setWinAmount(win);
+    }
   };
 
   // 快选投注项（根据选定的比赛生成）
@@ -270,7 +328,7 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
                           {getMatchScore(m)}
                         </div>
                         <div className="text-xs text-gray-400 mt-0.5 pl-4">
-                          {m.group ? `${m.group}组` : ""}{m.type !== "group" ? ` · ${m.type.toUpperCase()}` : ""} · {m.date}
+                          {m.group ? `${m.group}组` : ""}{m.type !== "group" ? ` · ${m.type.toUpperCase()}` : ""} · {m.date ? `${m.date} 北京时间` : ""}
                         </div>
                       </button>
                     ))
@@ -313,6 +371,51 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
               onChange={(e) => setBetOption(e.target.value)}
             />
           </div>
+
+          {/* 实时赔率参考（仅在选中比赛且有赔率数据时显示） */}
+          {selectedMatch && matchOdds && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <TrendingUp className="h-3.5 w-3.5 text-green-500" />
+                <span className="text-sm font-medium text-gray-700">实时赔率参考</span>
+                <span className="text-xs text-gray-400">({matchOdds.bookmaker} · 点击自动填入可赢金额)</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: `${selectedMatch.homeTeam} 胜`, value: matchOdds.home, option: `${selectedMatch.homeTeam} 胜` },
+                  { label: "平局", value: matchOdds.draw, option: "平局" },
+                  { label: `${selectedMatch.awayTeam} 胜`, value: matchOdds.away, option: `${selectedMatch.awayTeam} 胜` },
+                ].map(({ label, value, option }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    disabled={value === null}
+                    onClick={() => {
+                      if (value !== null) {
+                        setBetOption(option);
+                        applyOddsToWinAmount(value);
+                      }
+                    }}
+                    className={`flex flex-col items-center py-2 px-1 rounded-lg border transition-all ${
+                      value === null
+                        ? "border-gray-100 bg-gray-50 opacity-40 cursor-not-allowed"
+                        : betOption === option
+                        ? "border-green-400 bg-green-50 ring-1 ring-green-300"
+                        : "border-gray-200 bg-white hover:border-green-300 hover:bg-green-50 cursor-pointer"
+                    }`}
+                  >
+                    <span className="text-[10px] text-gray-500 mb-0.5 truncate w-full text-center leading-tight">{label}</span>
+                    <span className="text-base font-bold text-green-700 tabular-nums">
+                      {value !== null ? value.toFixed(2) : "-"}
+                    </span>
+                    {value !== null && (
+                      <span className="text-[9px] text-gray-400 mt-0.5">点击应用</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 投注金额 */}
           <div className="space-y-2">

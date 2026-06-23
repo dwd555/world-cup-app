@@ -6,9 +6,10 @@ import { BetList } from "./components/BetList";
 import { StatsCard } from "./components/StatsCard";
 import { UserSelector } from "./components/UserSelector";
 import { UserStatsSummary } from "./components/UserStatsSummary";
+import { BalanceHistory } from "./components/BalanceHistory";
 import { MatchCenter } from "./components/MatchCenter";
 import { Button } from "@/components/ui/button";
-import { Trophy, BookOpen } from "lucide-react";
+import { Trophy, BookOpen, History } from "lucide-react";
 
 interface Bet {
   id: number;
@@ -27,7 +28,7 @@ interface User {
   balance: number;
 }
 
-type PageTab = "bets" | "matches";
+type PageTab = "bets" | "matches" | "balance";
 
 export default function Home() {
   const [bets, setBets] = useState<Bet[]>([]);
@@ -37,6 +38,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [pageTab, setPageTab] = useState<PageTab>("bets");
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
 
   const fetchUsers = async () => {
     try {
@@ -78,6 +80,7 @@ export default function Home() {
     await fetchBets();
     await fetchAllBets();
     await fetchUsers();
+    setBalanceRefreshKey((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -136,6 +139,17 @@ export default function Home() {
           >
             <BookOpen className="h-4 w-4" />
             我的投注
+          </button>
+          <button
+            onClick={() => setPageTab("balance")}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
+              pageTab === "balance"
+                ? "bg-blue-600 text-white shadow"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <History className="h-4 w-4" />
+            余额记录
           </button>
           <button
             onClick={() => setPageTab("matches")}
@@ -202,7 +216,25 @@ export default function Home() {
             ) : (
               <BetList bets={bets} users={users} onRefresh={refreshAll} filter={filter} />
             )}
+
+            {/* 余额变更记录 */}
+            {/* <div className="mt-6">
+              <BalanceHistory
+                userId={currentUserId}
+                users={users}
+                refreshKey={balanceRefreshKey}
+              />
+            </div> */}
           </>
+        )}
+
+        {/* 余额记录 Tab */}
+        {pageTab === "balance" && (
+          <BalanceHistory
+            userId={currentUserId}
+            users={users}
+            refreshKey={balanceRefreshKey}
+          />
         )}
 
         {/* 赛事中心 Tab */}

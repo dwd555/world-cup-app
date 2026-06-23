@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 
-// 简单的内存缓存，5分钟过期
-let cache: { data: Match[]; timestamp: number } | null = null;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+// 内存缓存：有进行中的比赛时缓存30秒，否则5分钟
+let cache: { data: Match[]; timestamp: number; hasLive: boolean } | null = null;
+const CACHE_TTL_LIVE = 30 * 1000;       // 30秒（有实时比赛）
+const CACHE_TTL_NORMAL = 5 * 60 * 1000; // 5分钟（无实时比赛）
 
 export interface Match {
   id: string;
@@ -14,7 +15,7 @@ export interface Match {
   awayScore: string | null;
   homeScorers: string[];
   awayScorers: string[];
-  date: string; // "06/11/2026 13:00"
+  date: string; // 北京时间 "MM/DD HH:mm"
   group: string | null;
   matchday: string | null;
   type: string; // group, r32, r16, qf, sf, third, final
@@ -23,6 +24,7 @@ export interface Match {
   timeElapsed: string;
   displayName: string;
   stadiumId: string | null;
+  region: string | null; // Eastern / Central / Western
 }
 
 // 世界杯2026参赛队中文翻译
@@ -124,6 +126,69 @@ const typeLabel: Record<string, string> = {
   final: "决赛",
 };
 
+// 场馆 ID → 所在地区时区（2026年比赛期间均为夏令时）
+// Eastern (UTC-4) / Central (UTC-5) / Western (UTC-7)
+const stadiumRegion: Record<string, string> = {
+  "1": "Central",   // Estadio Azteca, Mexico City
+  "2": "Central",   // Estadio Akron, Guadalajara
+  "3": "Central",   // Estadio BBVA, Monterrey
+  "4": "Central",   // AT&T Stadium, Dallas
+  "5": "Central",   // NRG Stadium, Houston
+  "6": "Central",   // GEHA Field, Kansas City
+  "7": "Eastern",   // Mercedes-Benz Stadium, Atlanta
+  "8": "Eastern",   // Hard Rock Stadium, Miami
+  "9": "Eastern",   // Gillette Stadium, Boston
+  "10": "Eastern",  // Lincoln Financial Field, Philadelphia
+  "11": "Eastern",  // MetLife Stadium, New York/NJ
+  "12": "Eastern",  // BMO Field, Toronto
+  "13": "Western",  // BC Place, Vancouver
+  "14": "Western",  // Lumen Field, Seattle
+  "15": "Western",  // Levi's Stadium, San Francisco Bay Area
+  "16": "Western",  // SoFi Stadium, Los Angeles
+};
+
+// 各 region 相对 UTC 的偏移（小时，夏令时期间）
+const regionUtcOffset: Record<string, number> = {
+  Eastern: -4,  // EDT = UTC-4
+  Central: -5,  // CDT = UTC-5
+  Western: -7,  // PDT = UTC-7
+};
+
+/**
+ * 将场馆本地时间（"MM/DD/YYYY HH:mm"）换算成北京时间（UTC+8）
+ * 返回格式："MM/DD HH:mm（北京时间）"
+ */
+function toBeijingTime(localDate: string, stadiumId: string | null): string {
+  if (!localDate || localDate.trim() === "") return localDate;
+
+  // 解析 "06/11/2026 13:00" 格式
+  const match = localDate.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+  if (!match) return localDate;
+
+  const [, month, day, year, hour, minute] = match;
+  const region = stadiumId ? stadiumRegion[stadiumId] : null;
+  const utcOffset = region ? (regionUtcOffset[region] ?? -5) : -5; // 默认 Central
+
+  // 构造 UTC 时间
+  const localMs = Date.UTC(
+    parseInt(year),
+    parseInt(month) - 1,
+    parseInt(day),
+    parseInt(hour),
+    parseInt(minute),
+  );
+  // 减去场馆本地时区偏移，再加 +8（北京时间）
+  const beijingMs = localMs - utcOffset * 3600 * 1000 + 8 * 3600 * 1000;
+  const bjDate = new Date(beijingMs);
+
+  const bm = String(bjDate.getUTCMonth() + 1).padStart(2, "0");
+  const bd = String(bjDate.getUTCDate()).padStart(2, "0");
+  const bh = String(bjDate.getUTCHours()).padStart(2, "0");
+  const bmin = String(bjDate.getUTCMinutes()).padStart(2, "0");
+
+  return `${bm}/${bd} ${bh}:${bmin}`;
+}
+
 function parseScorers(raw: unknown): string[] {
   if (!raw || raw === "null") return [];
   const s = String(raw).replace(/^\{/, "").replace(/\}$/, "");
@@ -144,8 +209,11 @@ function buildDisplayName(m: Match): string {
 export async function GET() {
   try {
     const now = Date.now();
-    if (cache && now - cache.timestamp < CACHE_TTL) {
-      return NextResponse.json(cache.data);
+    if (cache) {
+      const ttl = cache.hasLive ? CACHE_TTL_LIVE : CACHE_TTL_NORMAL;
+      if (now - cache.timestamp < ttl) {
+        return NextResponse.json(cache.data);
+      }
     }
 
     const res = await fetch("https://worldcup26.ir/get/games", {
@@ -179,6 +247,11 @@ export async function GET() {
         g.time_elapsed != null &&
         String(g.time_elapsed) !== "";
 
+      const rawDate = String(g.local_date || "");
+      const stadId = g.stadium_id ? String(g.stadium_id) : null;
+      const region = stadId ? stadiumRegion[stadId] : null;
+      const beijingDate = toBeijingTime(rawDate, stadId);
+
       const m: Match = {
         id: String(g.id),
         homeTeam,
@@ -195,7 +268,7 @@ export async function GET() {
             : null,
         homeScorers: parseScorers(g.home_scorers),
         awayScorers: parseScorers(g.away_scorers),
-        date: String(g.local_date || ""),
+        date: beijingDate || rawDate,
         group: g.group ? String(g.group) : null,
         matchday: g.matchday ? String(g.matchday) : null,
         type: String(g.type || "group"),
@@ -203,13 +276,15 @@ export async function GET() {
         inProgress,
         timeElapsed: String(g.time_elapsed || "notstarted"),
         displayName: "",
-        stadiumId: g.stadium_id ? String(g.stadium_id) : null,
+        stadiumId: stadId,
+        region: region || null,
       };
       m.displayName = buildDisplayName(m);
       return m;
     });
 
-    cache = { data: matches, timestamp: now };
+    const hasLive = matches.some((m) => m.inProgress);
+    cache = { data: matches, timestamp: now, hasLive };
     return NextResponse.json(matches);
   } catch (error) {
     console.error("GET matches error:", error);

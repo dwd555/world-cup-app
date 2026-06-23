@@ -29,6 +29,20 @@ db.exec(`
     updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (userId) REFERENCES User(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS BalanceChange (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER NOT NULL,
+    changeAmount REAL NOT NULL,
+    oldBalance REAL NOT NULL,
+    newBalance REAL NOT NULL,
+    type TEXT NOT NULL,
+    reason TEXT,
+    betId INTEGER,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (userId) REFERENCES User(id) ON DELETE CASCADE,
+    FOREIGN KEY (betId) REFERENCES Bet(id) ON DELETE SET NULL
+  );
 `);
 
 // 兼容升级：为已有 Bet 表添加新字段（如果不存在）
@@ -59,4 +73,16 @@ export interface Bet {
   userId: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BalanceChange {
+  id: number;
+  userId: number;
+  changeAmount: number;
+  oldBalance: number;
+  newBalance: number;
+  type: string;
+  reason: string | null;
+  betId: number | null;
+  createdAt: string;
 }

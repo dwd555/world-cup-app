@@ -1,6 +1,23 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
+// 记录余额变更（辅助函数）
+function recordBalanceChange(
+  userId: number,
+  changeAmount: number,
+  type: string,
+  reason: string,
+  betId?: number
+) {
+  const user = db.prepare("SELECT balance FROM User WHERE id = ?").get(userId) as
+    { balance: number } | undefined;
+  if (!user) return;
+  const newBalance = user.balance + changeAmount;
+  db.prepare(
+    "INSERT INTO BalanceChange (userId, changeAmount, oldBalance, newBalance, type, reason, betId) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(userId, changeAmount, user.balance, newBalance, type, reason, betId ?? null);
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -57,6 +74,14 @@ export async function POST(request: Request) {
     db.prepare("UPDATE User SET balance = balance - ? WHERE id = ?")
       .run(amount, uid);
 
+    // 记录余额变更
+    recordBalanceChange(
+      uid,
+      -amount,
+      "bet_create",
+      `投注《${match}》，扣除本金 ¥${amount.toFixed(2)}`
+    );
+
     // odds 字段存储 winAmount（可赢金额）
     const stmt = db.prepare(
       "INSERT INTO Bet (match, matchId, betOption, betAmount, odds, result, userId) VALUES (?, ?, ?, ?, ?, 'pending', ?)"
@@ -70,9 +95,16 @@ export async function POST(request: Request) {
       uid
     );
 
+    const betId = Number(result.lastInsertRowid);
+
+    // 更新关联的 BalanceChange 记录 betId
+    db.prepare(
+      "UPDATE BalanceChange SET betId = ? WHERE userId = ? AND type = 'bet_create' AND betId IS NULL ORDER BY id DESC LIMIT 1"
+    ).run(betId, uid);
+
     const bet = db
       .prepare("SELECT * FROM Bet WHERE id = ?")
-      .get(result.lastInsertRowid);
+      .get(betId);
 
     return NextResponse.json(bet, { status: 201 });
   } catch (error) {

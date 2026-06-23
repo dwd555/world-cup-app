@@ -210,7 +210,8 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
                   <TableCell className="text-right whitespace-nowrap">
                     {bet.profit !== null ? (
                       <span className={bet.profit >= 0 ? "text-green-600 font-semibold" : "text-red-600 font-semibold"}>
-                        {bet.profit >= 0 ? "+" : ""}¥{bet.profit.toFixed(2)}
+                        {bet.profit >= 0 ? "+" : ""}
+                        ¥{(bet.result === "win" ? bet.profit + bet.betAmount : bet.profit).toFixed(2)}
                       </span>
                     ) : (
                       "-"
@@ -258,7 +259,8 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
                 <div className="text-right">
                   {bet.profit !== null ? (
                     <span className={bet.profit >= 0 ? "text-green-600 font-semibold" : "text-red-600 font-semibold"}>
-                      {bet.profit >= 0 ? "+" : ""}¥{bet.profit.toFixed(2)}
+                      {bet.profit >= 0 ? "+" : ""}
+                      ¥{(bet.result === "win" ? bet.profit + bet.betAmount : bet.profit).toFixed(2)}
                     </span>
                   ) : (
                     <span className="text-gray-400">-</span>
