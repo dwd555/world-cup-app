@@ -6,18 +6,18 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 export interface Match {
   id: string;
-  homeTeam: string;      // 中文名（主显示）
-  awayTeam: string;      // 中文名（主显示）
-  homeTeamEn: string;    // 英文名（备用）
-  awayTeamEn: string;    // 英文名（备用）
+  homeTeam: string; // 中文名（主显示）
+  awayTeam: string; // 中文名（主显示）
+  homeTeamEn: string; // 英文名（备用）
+  awayTeamEn: string; // 英文名（备用）
   homeScore: string | null;
   awayScore: string | null;
   homeScorers: string[];
   awayScorers: string[];
-  date: string;          // "06/11/2026 13:00"
+  date: string; // "06/11/2026 13:00"
   group: string | null;
   matchday: string | null;
-  type: string;          // group, r32, r16, qf, sf, third, final
+  type: string; // group, r32, r16, qf, sf, third, final
   finished: boolean;
   inProgress: boolean;
   timeElapsed: string;
@@ -91,10 +91,23 @@ const teamNameZh: Record<string, string> = {
   USA: "美国",
   Korea: "韩国",
   "Republic of Korea": "韩国",
-  "Czechia": "捷克",
+  Czechia: "捷克",
   "Ivory Coast (Côte d'Ivoire)": "科特迪瓦",
   "Côte d'Ivoire": "科特迪瓦",
   TBD: "待定",
+  Austria: "奥地利",
+  Jordan: "约旦",
+  Norway: "挪威",
+  "Cape Verde": "佛得角共和国",
+  Haiti: "海地",
+  "Bosnia and Herzegovina": "波黑",
+  Sweden: "瑞典",
+  Iraq: "伊拉克",
+  "Democratic Republic of the Congo": "刚果民主共和国",
+  Uzbekistan: "乌兹别克斯坦",
+  Panama: "巴拿马",
+  Tunisia: "突尼斯",
+  Curaçao: "库拉索",
 };
 
 function toZh(enName: string): string {
@@ -116,7 +129,7 @@ function parseScorers(raw: unknown): string[] {
   const s = String(raw).replace(/^\{/, "").replace(/\}$/, "");
   return s
     .split(",")
-    .map((x) => x.trim().replace(/^"/, "").replace(/"$/, ""))
+    .map(x => x.trim().replace(/^"/, "").replace(/"$/, ""))
     .filter(Boolean);
 }
 
@@ -144,15 +157,22 @@ export async function GET() {
     }
 
     const raw = await res.json();
-    const games: Record<string, unknown>[] = Array.isArray(raw) ? raw : raw.games || [];
+    const games: Record<string, unknown>[] = Array.isArray(raw)
+      ? raw
+      : raw.games || [];
 
-    const matches: Match[] = games.map((g) => {
-      const homeTeamEn = String(g.home_team_name_en || g.home_team_label || "TBD");
-      const awayTeamEn = String(g.away_team_name_en || g.away_team_label || "TBD");
+    const matches: Match[] = games.map(g => {
+      const homeTeamEn = String(
+        g.home_team_name_en || g.home_team_label || "TBD",
+      );
+      const awayTeamEn = String(
+        g.away_team_name_en || g.away_team_label || "TBD",
+      );
       const homeTeam = toZh(homeTeamEn);
       const awayTeam = toZh(awayTeamEn);
       const finished =
-        String(g.finished).toUpperCase() === "TRUE" || g.time_elapsed === "finished";
+        String(g.finished).toUpperCase() === "TRUE" ||
+        g.time_elapsed === "finished";
       const inProgress =
         !finished &&
         g.time_elapsed !== "notstarted" &&
