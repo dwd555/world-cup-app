@@ -168,8 +168,8 @@ function DayHeader({ dateKey, stats }: { dateKey: string; stats: DayStats }) {
 export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
   const [matchMap, setMatchMap] = useState<Map<string, MatchInfo>>(new Map());
   const [matchesLoading, setMatchesLoading] = useState(false);
-  const [editingProfitId, setEditingProfitId] = useState<number | null>(null);
-  const [profitInput, setProfitInput] = useState("");
+  const [editingWinAmountId, setEditingWinAmountId] = useState<number | null>(null);
+  const [winAmountInput, setWinAmountInput] = useState("");
 
   // 加载赛程数据（用于显示比分）
   const fetchMatchData = async () => {
@@ -212,36 +212,35 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
     }
   };
 
-  const handleStartEditProfit = (bet: Bet) => {
-    setEditingProfitId(bet.id);
-    // 显示当前 profit 值（净盈亏）
-    setProfitInput(bet.profit !== null ? bet.profit.toFixed(2) : "");
+  const handleStartEditWinAmount = (bet: Bet) => {
+    setEditingWinAmountId(bet.id);
+    setWinAmountInput(bet.odds.toFixed(2));
   };
 
-  const handleCancelEditProfit = () => {
-    setEditingProfitId(null);
-    setProfitInput("");
+  const handleCancelEditWinAmount = () => {
+    setEditingWinAmountId(null);
+    setWinAmountInput("");
   };
 
-  const handleSaveProfit = async (bet: Bet) => {
-    const val = parseFloat(profitInput);
-    if (isNaN(val)) {
-      toast.error("请输入有效数字");
+  const handleSaveWinAmount = async (bet: Bet) => {
+    const val = parseFloat(winAmountInput);
+    if (isNaN(val) || val < 0) {
+      toast.error("请输入有效金额");
       return;
     }
     try {
       const res = await fetch(`/api/bets/${bet.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ result: bet.result, profit: val }),
+        body: JSON.stringify({ result: bet.result, winAmount: val }),
       });
       if (!res.ok) throw new Error("更新失败");
-      toast.success("盈利已更新");
-      setEditingProfitId(null);
-      setProfitInput("");
+      toast.success("可赢金额已更新");
+      setEditingWinAmountId(null);
+      setWinAmountInput("");
       onRefresh();
     } catch {
-      toast.error("更新盈利失败");
+      toast.error("更新可赢金额失败");
     }
   };
 
@@ -323,7 +322,50 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
         <BetOptionBadge option={bet.betOption} />
       </TableCell>
       <TableCell className="text-right whitespace-nowrap">¥{bet.betAmount.toFixed(2)}</TableCell>
-      <TableCell className="text-right text-blue-600 whitespace-nowrap">¥{bet.odds.toFixed(2)}</TableCell>
+      <TableCell className="text-right whitespace-nowrap">
+        {editingWinAmountId === bet.id ? (
+          <div className="flex items-center gap-1 justify-end">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={winAmountInput}
+              onChange={(e) => setWinAmountInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveWinAmount(bet);
+                if (e.key === "Escape") handleCancelEditWinAmount();
+              }}
+              className="w-20 h-7 rounded border border-blue-400 px-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+              autoFocus
+            />
+            <button
+              onClick={() => handleSaveWinAmount(bet)}
+              className="text-green-600 hover:text-green-700 p-0.5"
+              title="保存"
+            >
+              <Check className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleCancelEditWinAmount}
+              className="text-gray-400 hover:text-gray-600 p-0.5"
+              title="取消"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-1">
+            <span className="text-blue-600">¥{bet.odds.toFixed(2)}</span>
+            <button
+              onClick={() => handleStartEditWinAmount(bet)}
+              className="text-gray-300 hover:text-blue-500 p-0.5"
+              title="修改可赢金额"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+      </TableCell>
       <TableCell className="text-center">
         <Badge variant="secondary" className={resultConfig[bet.result]?.color || ""}>
           {resultConfig[bet.result]?.icon}
@@ -331,49 +373,11 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
         </Badge>
       </TableCell>
       <TableCell className="text-right whitespace-nowrap">
-        {editingProfitId === bet.id ? (
-          <div className="flex items-center gap-1 justify-end">
-            <input
-              type="number"
-              step="0.01"
-              value={profitInput}
-              onChange={(e) => setProfitInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSaveProfit(bet);
-                if (e.key === "Escape") handleCancelEditProfit();
-              }}
-              className="w-20 h-7 rounded border border-blue-400 px-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-              autoFocus
-            />
-            <button
-              onClick={() => handleSaveProfit(bet)}
-              className="text-green-600 hover:text-green-700 p-0.5"
-              title="保存"
-            >
-              <Check className="h-4 w-4" />
-            </button>
-            <button
-              onClick={handleCancelEditProfit}
-              className="text-gray-400 hover:text-gray-600 p-0.5"
-              title="取消"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : bet.profit !== null ? (
-          <div className="flex items-center justify-end gap-1">
-            <span className={bet.profit >= 0 ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}>
-              {bet.profit >= 0 ? "+" : ""}
-              ¥{bet.profit.toFixed(2)}
-            </span>
-            <button
-              onClick={() => handleStartEditProfit(bet)}
-              className="text-gray-300 hover:text-blue-500 p-0.5"
-              title="修改盈利"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
-          </div>
+        {bet.profit !== null ? (
+          <span className={bet.profit >= 0 ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}>
+            {bet.profit >= 0 ? "+" : ""}
+            ¥{bet.profit.toFixed(2)}
+          </span>
         ) : (
           <span className="text-gray-400">-</span>
         )}
@@ -410,52 +414,11 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
           </Badge>
         </div>
         <div className="text-right">
-          {editingProfitId === bet.id ? (
-            <div className="flex items-center gap-1 justify-end">
-              <input
-                type="number"
-                step="0.01"
-                value={profitInput}
-                onChange={(e) => setProfitInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSaveProfit(bet);
-                  if (e.key === "Escape") handleCancelEditProfit();
-                }}
-                className="w-20 h-8 rounded border border-blue-400 px-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
-                autoFocus
-              />
-              <button
-                onClick={() => handleSaveProfit(bet)}
-                className="text-green-600 hover:text-green-700 p-1"
-                title="保存"
-              >
-                <Check className="h-4 w-4" />
-              </button>
-              <button
-                onClick={handleCancelEditProfit}
-                className="text-gray-400 hover:text-gray-600 p-1"
-                title="取消"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ) : bet.profit !== null ? (
-            <div className="flex items-center justify-end gap-1">
-              <span
-                className={bet.profit >= 0 ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}
-                onClick={() => handleStartEditProfit(bet)}
-              >
-                {bet.profit >= 0 ? "+" : ""}
-                ¥{bet.profit.toFixed(2)}
-              </span>
-              <button
-                onClick={() => handleStartEditProfit(bet)}
-                className="text-gray-300 hover:text-blue-500 p-0.5"
-                title="修改盈利"
-              >
-                <Pencil className="h-3 w-3" />
-              </button>
-            </div>
+          {bet.profit !== null ? (
+            <span className={bet.profit >= 0 ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}>
+              {bet.profit >= 0 ? "+" : ""}
+              ¥{bet.profit.toFixed(2)}
+            </span>
           ) : (
             <span className="text-gray-400">-</span>
           )}
@@ -476,8 +439,50 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
         <div>
           <span className="text-gray-400">投注:</span> ¥{bet.betAmount.toFixed(2)}
         </div>
-        <div>
-          <span className="text-gray-400">可赢:</span> <span className="text-blue-600">¥{bet.odds.toFixed(2)}</span>
+        <div className="flex items-center gap-1">
+          <span className="text-gray-400">可赢:</span>
+          {editingWinAmountId === bet.id ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={winAmountInput}
+                onChange={(e) => setWinAmountInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveWinAmount(bet);
+                  if (e.key === "Escape") handleCancelEditWinAmount();
+                }}
+                className="w-20 h-7 rounded border border-blue-400 px-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                autoFocus
+              />
+              <button
+                onClick={() => handleSaveWinAmount(bet)}
+                className="text-green-600 hover:text-green-700 p-0.5"
+                title="保存"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <button
+                onClick={handleCancelEditWinAmount}
+                className="text-gray-400 hover:text-gray-600 p-0.5"
+                title="取消"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-0.5">
+              <span className="text-blue-600">¥{bet.odds.toFixed(2)}</span>
+              <button
+                onClick={() => handleStartEditWinAmount(bet)}
+                className="text-gray-300 hover:text-blue-500 p-0.5"
+                title="修改可赢金额"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

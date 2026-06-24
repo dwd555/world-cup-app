@@ -25,7 +25,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { result, profit: customProfit } = body;
+    const { result, winAmount: customWinAmount } = body;
 
     if (!result || !["win", "loss", "pending"].includes(result)) {
       return NextResponse.json(
@@ -43,28 +43,34 @@ export async function PUT(
 
     const oldResult = existing.result;
     const oldProfit = existing.profit;
+    const oldWinAmount = existing.odds; // odds 字段存储 winAmount
     const newResult = result;
-    const { betAmount, odds: winAmount, userId, match } = existing;
+    const { betAmount, userId, match } = existing;
 
-    // 计算新的 profit
+    // 可赢金额：如果传入了 customWinAmount 则使用新值，否则保持原值
+    const newWinAmount = customWinAmount != null && !isNaN(Number(customWinAmount))
+      ? Number(customWinAmount)
+      : oldWinAmount;
+
+    // 根据 result 和 winAmount 自动计算 profit
     let newProfit: number | null;
     if (newResult === "pending") {
       newProfit = null;
-    } else if (customProfit != null && !isNaN(Number(customProfit))) {
-      newProfit = Number(customProfit);
+    } else if (newResult === "win") {
+      newProfit = newWinAmount; // 赢 = 可赢金额
     } else {
-      newProfit = newResult === "win" ? winAmount : -betAmount;
+      newProfit = -betAmount; // 输 = -投注额
     }
 
-    // 如果结果和 profit 都没变化，直接返回
-    if (oldResult === newResult && oldProfit === newProfit) {
+    // 如果结果、winAmount、profit 都没变化，直接返回
+    if (oldResult === newResult && oldWinAmount === newWinAmount && oldProfit === newProfit) {
       const unchanged = db.prepare("SELECT * FROM Bet WHERE id = ?").get(Number(id));
       return NextResponse.json(unchanged);
     }
 
     // 统一余额变动计算：balanceChange = betAmount + profit
     // - 赢时 profit > 0：返还本金 + 盈利
-    // - 输时 profit < 0：返还本金 + 亏损（如 profit = -50, 返还 betAmount-50）
+    // - 输时 profit < 0：返还本金 + 亏损
     // - 待定 profit = null：无变动
     let oldBalanceChange = 0;
     if (oldResult === "win" || oldResult === "loss") {
@@ -84,18 +90,24 @@ export async function PUT(
 
       const resultLabel = newResult === "win" ? "赢" : newResult === "loss" ? "输" : "待定";
       const oldLabel = oldResult === "pending" ? "待定" : oldResult === "win" ? "赢" : "输";
-      const profitNote = customProfit != null ? `（手动调整盈利 ¥${newProfit?.toFixed(2)}）` : "";
+      const winAmountNote = newWinAmount !== oldWinAmount ? `（可赢金额 ¥${oldWinAmount.toFixed(2)} → ¥${newWinAmount.toFixed(2)}）` : "";
       recordBalanceChange(
         userId,
         netBalanceChange,
         "bet_result",
-        `《${match}》结果从「${oldLabel}」改为「${resultLabel}」${profitNote}，余额变动 ¥${netBalanceChange.toFixed(2)}`,
+        `《${match}》结果从「${oldLabel}」改为「${resultLabel}」${winAmountNote}，余额变动 ¥${netBalanceChange.toFixed(2)}`,
         Number(id)
       );
     }
 
-    db.prepare("UPDATE Bet SET result = ?, profit = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(newResult, newProfit, Number(id));
+    // 更新 Bet：result、profit，以及 odds（可赢金额）如果有变化
+    if (newWinAmount !== oldWinAmount) {
+      db.prepare("UPDATE Bet SET result = ?, profit = ?, odds = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(newResult, newProfit, newWinAmount, Number(id));
+    } else {
+      db.prepare("UPDATE Bet SET result = ?, profit = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(newResult, newProfit, Number(id));
+    }
 
     const updated = db.prepare("SELECT * FROM Bet WHERE id = ?").get(Number(id));
 
