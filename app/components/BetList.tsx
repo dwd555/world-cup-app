@@ -12,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Trash2, Trophy, XCircle, Minus, RefreshCw, Calendar, Pencil, Check, X } from "lucide-react";
+import { Trash2, Trophy, XCircle, Minus, RefreshCw, Calendar, Pencil, Check, X, ChevronLeft, ChevronRight, AlertTriangle } from "lucide-react";
 
 interface Bet {
   id: number;
@@ -170,6 +170,13 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [editingWinAmountId, setEditingWinAmountId] = useState<number | null>(null);
   const [winAmountInput, setWinAmountInput] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 5; // 每页显示5个日期分组
+
+  // 切换筛选条件时重置页码
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filter]);
 
   // 加载赛程数据（用于显示比分）
   const fetchMatchData = async () => {
@@ -196,6 +203,16 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
 
   // 按日期分组
   const groupedDays = groupBetsByDate(filteredBets);
+  
+  // 待结算检测：找到 matchId 匹配且比赛已结束的待定投注
+  const pendingFinished = filteredBets.filter(
+    (b) => b.result === "pending" && b.matchId && matchMap.get(b.matchId)?.finished
+  );
+
+  // 分页
+  const totalPages = Math.max(1, Math.ceil(groupedDays.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedGroups = groupedDays.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const handleSetResult = async (id: number, result: string) => {
     try {
@@ -308,7 +325,7 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
 
   // ===== 桌面端：单行投注渲染 =====
   const renderBetRow = (bet: Bet) => (
-    <TableRow key={bet.id}>
+    <TableRow key={bet.id} id={`bet-${bet.id}`}>
       <TableCell className="font-medium text-sm whitespace-nowrap">
         {userMap.get(bet.userId) || "未知"}
       </TableCell>
@@ -403,7 +420,7 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
 
   // ===== 移动端：单条投注卡片渲染 =====
   const renderBetCard = (bet: Bet) => (
-    <div key={bet.id} className="border-b last:border-b-0 p-4 space-y-3">
+    <div key={bet.id} id={`bet-${bet.id}`} className="border-b last:border-b-0 p-4 space-y-3">
       {/* 顶部：用户 + 结果标签 + 盈利 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 flex-wrap">
@@ -518,7 +535,33 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
 
   return (
     <div className="space-y-4">
-      {groupedDays.map((group) => {
+      {/* 待结算提醒 */}
+      {pendingFinished.length > 0 && (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+          <div className="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-200">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            <span>
+              有 <strong>{pendingFinished.length}</strong> 笔待定投注的比赛已结束，请更新结果
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 shrink-0"
+            onClick={() => {
+              // 滚动到第一个待结算投注
+              const firstPending = pendingFinished[0];
+              if (firstPending) {
+                document.getElementById(`bet-${firstPending.id}`)?.scrollIntoView({ behavior: "smooth" });
+              }
+            }}
+          >
+            查看
+          </Button>
+        </div>
+      )}
+
+      {paginatedGroups.map((group) => {
         const stats = computeDayStats(group.bets);
         return (
           <div key={group.dateKey} className="rounded-lg border bg-white overflow-hidden">
@@ -564,6 +607,41 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
           </div>
         );
       })}
+
+      {/* 分页控件 */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={safePage <= 1}
+            className="h-8 px-2"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+            <Button
+              key={page}
+              variant={safePage === page ? "default" : "outline"}
+              size="sm"
+              onClick={() => setCurrentPage(page)}
+              className="h-8 w-8"
+            >
+              {page}
+            </Button>
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages}
+            className="h-8 px-2"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

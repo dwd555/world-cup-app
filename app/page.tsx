@@ -8,8 +8,12 @@ import { UserSelector } from "./components/UserSelector";
 import { UserStatsSummary } from "./components/UserStatsSummary";
 import { BalanceHistory } from "./components/BalanceHistory";
 import { MatchCenter } from "./components/MatchCenter";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { exportBetsToCSV } from "@/lib/export";
+import { ProfitChart } from "./components/ProfitChart";
+import { Leaderboard } from "./components/Leaderboard";
 import { Button } from "@/components/ui/button";
-import { Trophy, BookOpen, History } from "lucide-react";
+import { Trophy, BookOpen, History, Download, ArrowUpDown } from "lucide-react";
 
 interface Bet {
   id: number;
@@ -42,6 +46,8 @@ export default function Home() {
   const [filter, setFilter] = useState("all");
   const [pageTab, setPageTab] = useState<PageTab>("bets");
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+  const [sortBy, setSortBy] = useState<"date" | "amount" | "profit">("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const fetchUsers = async () => {
     try {
@@ -104,17 +110,31 @@ export default function Home() {
 
   const currentUser = users.find((u) => u.id === currentUserId);
 
+  // 排序投注
+  const sortedBets = [...bets].sort((a, b) => {
+    let cmp = 0;
+    if (sortBy === "date") {
+      cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    } else if (sortBy === "amount") {
+      cmp = a.betAmount - b.betAmount;
+    } else if (sortBy === "profit") {
+      cmp = (a.profit ?? 0) - (b.profit ?? 0);
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
   return (
-    <div className="min-h-full bg-gray-50">
+    <div className="min-h-full bg-gray-50 dark:bg-gray-950">
       <div className="max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-3">
+        <div className="flex items-center justify-between mb-4 gap-3">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
               ⚽ 足球投注记录
             </h1>
-            <p className="mt-0.5 text-sm text-gray-500">2026 世界杯投注追踪</p>
+            <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">2026 世界杯投注追踪</p>
           </div>
+          <ThemeToggle />
           {pageTab === "bets" && (
             <div className="flex items-center gap-3">
               <UserSelector
@@ -131,13 +151,13 @@ export default function Home() {
         </div>
 
         {/* 顶部 Tab 切换 */}
-        <div className="flex gap-1 bg-white border border-gray-200 rounded-xl p-1 mb-5 shadow-sm">
+        <div className="flex gap-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-1 mb-5 shadow-sm">
           <button
             onClick={() => setPageTab("bets")}
             className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
               pageTab === "bets"
                 ? "bg-blue-600 text-white shadow"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
             }`}
           >
             <BookOpen className="h-4 w-4" />
@@ -148,7 +168,7 @@ export default function Home() {
             className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
               pageTab === "balance"
                 ? "bg-blue-600 text-white shadow"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
             }`}
           >
             <History className="h-4 w-4" />
@@ -159,7 +179,7 @@ export default function Home() {
             className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
               pageTab === "matches"
                 ? "bg-blue-600 text-white shadow"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
             }`}
           >
             <Trophy className="h-4 w-4" />
@@ -178,9 +198,9 @@ export default function Home() {
             {/* Stats */}
             <div className="mb-5">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
                   当前视图:{" "}
-                  <span className="font-medium text-gray-900">
+                  <span className="font-medium text-gray-900 dark:text-gray-100">
                     {currentUser?.name || "全部用户"}
                   </span>
                 </div>
@@ -190,17 +210,25 @@ export default function Home() {
                   </div>
                 )}
               </div>
-              <StatsCard bets={bets} />
+              <StatsCard bets={sortedBets} />
               {currentUserId === null && (
-                <div className="mt-4">
-                  <div className="text-sm font-medium text-gray-700 mb-2">各用户汇总</div>
-                  <UserStatsSummary bets={allBets} users={users} />
-                </div>
+                <>
+                  <div className="mt-4">
+                    <ProfitChart bets={bets} users={users} />
+                  </div>
+                  <div className="mt-4">
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">各用户汇总</div>
+                    <UserStatsSummary bets={allBets} users={users} />
+                    <div className="mt-4">
+                      <Leaderboard bets={allBets} users={users} />
+                    </div>
+                  </div>
+                </>
               )}
             </div>
 
             {/* Filter */}
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
               {filterButtons.map((btn) => (
                 <Button
                   key={btn.key}
@@ -212,12 +240,37 @@ export default function Home() {
                   {btn.label}
                 </Button>
               ))}
+              <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (sortBy === "date") { setSortBy("amount"); setSortDir("desc"); }
+                  else if (sortBy === "amount") { setSortBy("profit"); setSortDir("desc"); }
+                  else { setSortBy("date"); setSortDir("desc"); }
+                }}
+                className="text-xs sm:text-sm"
+              >
+                <ArrowUpDown className="h-3 w-3 mr-1" />
+                {sortBy === "date" ? "日期" : sortBy === "amount" ? "金额" : "盈利"}
+              </Button>
+              <div className="flex-1" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => exportBetsToCSV(sortedBets, users)}
+                disabled={sortedBets.length === 0}
+                className="text-xs sm:text-sm"
+              >
+                <Download className="h-3 w-3 mr-1" />
+                导出 CSV
+              </Button>
             </div>
 
             {loading ? (
               <div className="text-center py-12 text-gray-400">加载中...</div>
             ) : (
-              <BetList bets={bets} users={users} onRefresh={refreshAll} filter={filter} />
+              <BetList bets={sortedBets} users={users} onRefresh={refreshAll} filter={filter} />
             )}
 
             {/* 余额变更记录 */}
