@@ -12,7 +12,8 @@ RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.li
     rm -rf /var/lib/apt/lists/*
 
 # Install dependencies with China npm mirror
-COPY package.json package-lock.json* ./
+# 删除 Windows 生成的 lock 文件，避免 lightningcss 等原生模块平台不匹配
+COPY package.json ./
 COPY .npmrc ./
 RUN npm config set registry https://registry.npmmirror.com && npm install
 

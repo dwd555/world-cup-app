@@ -12,7 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Plus, Search, RefreshCw, Trophy, Clock, CheckCircle, TrendingUp, X } from "lucide-react";
+import { Plus, Search, RefreshCw, Trophy, Clock, CheckCircle, TrendingUp, X, Camera, Upload, Loader2, Check } from "lucide-react";
 
 interface Match {
   id: string;
@@ -107,11 +107,32 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
   const [parlayLegs, setParlayLegs] = useState<ParlayLeg[]>([]);
   const [parlayType, setParlayType] = useState("2串1");
 
-  // 当弹窗打开时拉取赛程和赔率
+  // 图片识别相关
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrPreview, setOcrPreview] = useState<string | null>(null);
+  const [ocrResult, setOcrResult] = useState<{
+    parlayType: string | null;
+    matches: { name: string; odds: string | null }[];
+    betAmount: string | null;
+    winAmount: string | null;
+    rawText: string;
+  } | null>(null);
+  const [ocrApplied, setOcrApplied] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // 当弹窗打开时拉取赛程和赔率，关闭时重置图片识别状态
   useEffect(() => {
     if (open) {
       fetchMatches();
       fetchOdds();
+    } else {
+      // 关闭弹窗时重置图片识别状态
+      setOcrPreview(null);
+      setOcrResult(null);
+      setOcrApplied(false);
+      setOcrLoading(false);
     }
   }, [open]);
 
@@ -228,6 +249,171 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
       const win = (100 * (oddsValue - 1)).toFixed(2);
       setWinAmount(win);
     }
+  };
+
+  // ===== 图片识别相关函数 =====
+
+  const processImageFile = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast.error("请上传图片文件");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("图片大小不能超过 10MB");
+      return;
+    }
+
+    // 生成预览
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setOcrPreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+
+    // 转换为 base64
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+
+    setOcrLoading(true);
+    setOcrResult(null);
+    setOcrApplied(false);
+
+    try {
+      const res = await fetch("/api/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64 }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "识别失败" }));
+        toast.error(err.error || "图片识别失败");
+        return;
+      }
+
+      const data = await res.json();
+      setOcrResult(data);
+    } catch {
+      toast.error("图片识别请求失败，请重试");
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processImageFile(file);
+    }
+    // 清空 input 以便重复选择同一文件
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processImageFile(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleApplyOcrResult = () => {
+    if (!ocrResult) return;
+
+    const { parlayType: detectedParlay, matches: detectedMatches, betAmount: detectedBet, winAmount: detectedWin } = ocrResult;
+
+    // 回填投注额
+    if (detectedBet) {
+      setBetAmount(detectedBet);
+    }
+
+    // 回填可赢额
+    if (detectedWin) {
+      setWinAmount(detectedWin);
+    }
+
+    // 判断是单场还是串关
+    if (detectedMatches.length > 1 && detectedParlay) {
+      // 串关模式
+      setBetType("parlay");
+      setParlayType(detectedParlay);
+
+      // 为每场比赛尝试匹配赛程
+      const newLegs: ParlayLeg[] = detectedMatches.map((m) => {
+        // 在赛程中查找匹配的比赛
+        const matched = matches.find(
+          (fm) =>
+            fm.homeTeam.includes(m.name) ||
+            fm.awayTeam.includes(m.name) ||
+            fm.displayName.includes(m.name)
+        );
+        return {
+          match: matched ?? ({
+            id: `ocr_${m.name}`,
+            homeTeam: m.name,
+            awayTeam: "",
+            homeTeamEn: "",
+            awayTeamEn: "",
+            homeScore: null,
+            awayScore: null,
+            date: "",
+            group: null,
+            type: "group",
+            finished: false,
+            timeElapsed: "notstarted",
+            displayName: m.name,
+          } as Match),
+          selection: "",
+        };
+      });
+      setParlayLegs(newLegs);
+    } else if (detectedMatches.length === 1) {
+      // 单场模式
+      const matched = matches.find(
+        (fm) =>
+          fm.homeTeam.includes(detectedMatches[0].name) ||
+          fm.awayTeam.includes(detectedMatches[0].name) ||
+          fm.displayName.includes(detectedMatches[0].name)
+      );
+      if (matched) {
+        handleSelectMatch(matched);
+      } else {
+        setMatch(detectedMatches[0].name);
+        setMatchSearch(detectedMatches[0].name);
+      }
+    } else if (detectedMatches.length === 0) {
+      // 没有识别到比赛，尝试从原始文本推断
+      // 如果检测到串关类型但没有比赛，可能是解析问题
+      if (detectedParlay) {
+        setBetType("parlay");
+        setParlayType(detectedParlay);
+      }
+    }
+
+    setOcrApplied(true);
+    toast.success("识别结果已回填，请检查并确认");
+  };
+
+  const handleClearOcr = () => {
+    setOcrPreview(null);
+    setOcrResult(null);
+    setOcrApplied(false);
+    setOcrLoading(false);
   };
 
   // 快选投注项
@@ -445,6 +631,149 @@ export function BetForm({ onSuccess, users, currentUserId }: BetFormProps) {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* ===== 图片识别区域 ===== */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Camera className="h-4 w-4 text-gray-500" />
+              <Label className="!mb-0">图片识别投注单</Label>
+              <span className="text-xs text-gray-400 ml-auto">支持拖拽或点击上传</span>
+            </div>
+
+            {/* 上传区域 */}
+            {!ocrPreview && !ocrLoading && (
+              <div
+                ref={dragRef}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onClick={() => fileInputRef.current?.click()}
+                className={`relative border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all ${
+                  isDragging
+                    ? "border-blue-400 bg-blue-50"
+                    : "border-gray-300 hover:border-blue-400 hover:bg-gray-50"
+                }`}
+              >
+                <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">点击或拖拽上传投注单截图</p>
+                <p className="text-xs text-gray-400 mt-1">自动识别场次、投注额、可赢额</p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+              </div>
+            )}
+
+            {/* 图片预览 + 识别中 */}
+            {ocrPreview && ocrLoading && (
+              <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                <div className="flex items-start gap-3">
+                  <img
+                    src={ocrPreview}
+                    alt="预览"
+                    className="w-24 h-24 object-cover rounded-md border border-gray-200 flex-shrink-0"
+                  />
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="h-6 w-6 text-blue-500 animate-spin" />
+                      <span className="text-sm text-gray-500">正在识别图片内容...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 识别完成 - 显示结果 */}
+            {ocrPreview && !ocrLoading && ocrResult && (
+              <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
+                <div className="flex items-start gap-3">
+                  <img
+                    src={ocrPreview}
+                    alt="预览"
+                    className="w-20 h-20 object-cover rounded-md border border-gray-200 flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    {/* 串关类型 */}
+                    {ocrResult.parlayType && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-500">串关：</span>
+                        <span className="text-xs font-medium text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                          {ocrResult.parlayType}
+                        </span>
+                      </div>
+                    )}
+                    {/* 比赛列表 */}
+                    {ocrResult.matches.length > 0 && (
+                      <div>
+                        <span className="text-xs text-gray-500">场次：</span>
+                        <div className="mt-0.5 space-y-0.5">
+                          {ocrResult.matches.map((m, i) => (
+                            <div key={i} className="text-xs text-gray-700 flex items-center gap-1">
+                              <span className="text-gray-400">{i + 1}.</span>
+                              <span>{m.name}</span>
+                              {m.odds && (
+                                <span className="text-orange-600 font-medium">@{m.odds}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* 投注额 */}
+                    {ocrResult.betAmount && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-500">投注额：</span>
+                        <span className="text-xs font-bold text-blue-600">¥{ocrResult.betAmount}</span>
+                      </div>
+                    )}
+                    {/* 可赢额 */}
+                    {ocrResult.winAmount && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-500">可赢额：</span>
+                        <span className="text-xs font-bold text-green-600">¥{ocrResult.winAmount}</span>
+                      </div>
+                    )}
+                    {/* 如果没有识别到关键信息 */}
+                    {!ocrResult.parlayType && ocrResult.matches.length === 0 && !ocrResult.betAmount && !ocrResult.winAmount && (
+                      <div className="text-xs text-red-500">未能识别到有效信息，请重试或手动填写</div>
+                    )}
+                  </div>
+                </div>
+                {/* 操作按钮 */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleApplyOcrResult}
+                    disabled={ocrApplied}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                      ocrApplied
+                        ? "bg-green-50 text-green-600 border-green-200 cursor-default"
+                        : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                    }`}
+                  >
+                    {ocrApplied ? (
+                      <>
+                        <Check className="h-3.5 w-3.5" />
+                        已回填
+                      </>
+                    ) : (
+                      "确认回填"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearOcr}
+                    className="px-3 py-1.5 rounded-md text-xs font-medium border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors"
+                  >
+                    重新上传
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ===== 串关模式 ===== */}

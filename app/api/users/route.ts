@@ -11,10 +11,12 @@ function recordBalanceChange(
   const user = db.prepare("SELECT balance FROM User WHERE id = ?").get(userId) as
     { balance: number } | undefined;
   if (!user) return;
-  const newBalance = user.balance + changeAmount;
+  // 此时余额已被调用方更新，user.balance 是变更后的值
+  const newBalance = user.balance;
+  const oldBalance = newBalance - changeAmount;
   db.prepare(
     "INSERT INTO BalanceChange (userId, changeAmount, oldBalance, newBalance, type, reason) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(userId, changeAmount, user.balance, newBalance, type, reason);
+  ).run(userId, changeAmount, oldBalance, newBalance, type, reason);
 }
 
 export async function GET() {
