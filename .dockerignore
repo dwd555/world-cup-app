@@ -17,3 +17,4 @@ nginx.conf
 .vscode
 .eslint*
 *.md
+# 注意：保留 node-v22.21.0-linux-x64.tar.xz 以便 Dockerfile 预下载备选

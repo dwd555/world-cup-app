@@ -12,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Trash2, Trophy, XCircle, Minus, RefreshCw } from "lucide-react";
+import { Trash2, Trophy, XCircle, Minus, RefreshCw, Calendar, Pencil, Check, X } from "lucide-react";
 
 interface Bet {
   id: number;
@@ -45,9 +45,131 @@ interface BetListProps {
   filter: string;
 }
 
+// ===== 日期分组辅助函数 =====
+
+function getDateKey(createdAt: string): string {
+  // SQLite CURRENT_TIMESTAMP 返回 UTC 时间，格式 "YYYY-MM-DD HH:MM:SS"
+  // 需转换为本地时区后再提取日期，避免凌晨前后归错日期
+  const isoStr = createdAt.includes("T") ? createdAt : createdAt.replace(" ", "T");
+  const utcStr = isoStr.endsWith("Z") ? isoStr : isoStr + "Z";
+  const date = new Date(utcStr);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateLabel(dateStr: string): { label: string; sublabel: string } {
+  const parts = dateStr.split("-").map(Number);
+  const [year, month, day] = parts;
+  const date = new Date(year, month - 1, day);
+  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  let label: string;
+  if (date.getTime() === today.getTime()) {
+    label = "今天";
+  } else if (date.getTime() === yesterday.getTime()) {
+    label = "昨天";
+  } else {
+    label = `${month}月${day}日`;
+  }
+
+  const dateStrFormatted = `${year}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}`;
+  return { label, sublabel: `${weekdays[date.getDay()]} · ${dateStrFormatted}` };
+}
+
+function groupBetsByDate(bets: Bet[]): { dateKey: string; bets: Bet[] }[] {
+  const groups = new Map<string, Bet[]>();
+  for (const bet of bets) {
+    const key = getDateKey(bet.createdAt);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key)!.push(bet);
+  }
+  return Array.from(groups.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([dateKey, dayBets]) => ({ dateKey, bets: dayBets }));
+}
+
+interface DayStats {
+  count: number;
+  totalAmount: number;
+  winCount: number;
+  lossCount: number;
+  pendingCount: number;
+  totalProfit: number;
+  settledCount: number;
+}
+
+function computeDayStats(dayBets: Bet[]): DayStats {
+  const count = dayBets.length;
+  const totalAmount = dayBets.reduce((sum, b) => sum + b.betAmount, 0);
+  const winCount = dayBets.filter((b) => b.result === "win").length;
+  const lossCount = dayBets.filter((b) => b.result === "loss").length;
+  const pendingCount = dayBets.filter((b) => b.result === "pending").length;
+  const settledCount = winCount + lossCount;
+  const totalProfit = dayBets.reduce((sum, b) => sum + (b.profit ?? 0), 0);
+  return { count, totalAmount, winCount, lossCount, pendingCount, totalProfit, settledCount };
+}
+
+// ===== 日汇总头部组件 =====
+
+function DayHeader({ dateKey, stats }: { dateKey: string; stats: DayStats }) {
+  const { label, sublabel } = formatDateLabel(dateKey);
+  const isProfit = stats.totalProfit > 0;
+  const isLoss = stats.totalProfit < 0;
+
+  return (
+    <div className="flex items-center justify-between flex-wrap gap-2 py-2.5 px-3 bg-gray-50 border-b border-gray-200">
+      <div className="flex items-center gap-2">
+        <Calendar className="h-4 w-4 text-gray-400 flex-shrink-0" />
+        <span className="font-semibold text-gray-800 text-sm">{label}</span>
+        <span className="text-xs text-gray-400">{sublabel}</span>
+      </div>
+      <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm">
+        <span className="text-gray-500">
+          {stats.count}注
+          {stats.pendingCount > 0 && (
+            <span className="text-gray-400 ml-1">({stats.pendingCount}待定)</span>
+          )}
+        </span>
+        <span className="text-gray-300">|</span>
+        <span className="text-gray-500">投 ¥{stats.totalAmount.toFixed(0)}</span>
+        <span className="text-gray-300">|</span>
+        {stats.settledCount > 0 ? (
+          <>
+            <span className="text-gray-500">
+              {stats.winCount}赢{stats.lossCount}输
+            </span>
+            <span className="text-gray-300">|</span>
+            <span
+              className={`font-bold ${
+                isProfit ? "text-red-600" : isLoss ? "text-green-600" : "text-gray-600"
+              }`}
+            >
+              {stats.totalProfit >= 0 ? "+" : ""}
+              ¥{stats.totalProfit.toFixed(2)}
+            </span>
+          </>
+        ) : (
+          <span className="text-gray-400">未结算</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
   const [matchMap, setMatchMap] = useState<Map<string, MatchInfo>>(new Map());
   const [matchesLoading, setMatchesLoading] = useState(false);
+  const [editingProfitId, setEditingProfitId] = useState<number | null>(null);
+  const [profitInput, setProfitInput] = useState("");
 
   // 加载赛程数据（用于显示比分）
   const fetchMatchData = async () => {
@@ -72,6 +194,9 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
   const filteredBets =
     filter === "all" ? bets : bets.filter((b) => b.result === filter);
 
+  // 按日期分组
+  const groupedDays = groupBetsByDate(filteredBets);
+
   const handleSetResult = async (id: number, result: string) => {
     try {
       const res = await fetch(`/api/bets/${id}`, {
@@ -84,6 +209,39 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
       onRefresh();
     } catch {
       toast.error("更新结果失败");
+    }
+  };
+
+  const handleStartEditProfit = (bet: Bet) => {
+    setEditingProfitId(bet.id);
+    // 显示当前 profit 值（净盈亏）
+    setProfitInput(bet.profit !== null ? bet.profit.toFixed(2) : "");
+  };
+
+  const handleCancelEditProfit = () => {
+    setEditingProfitId(null);
+    setProfitInput("");
+  };
+
+  const handleSaveProfit = async (bet: Bet) => {
+    const val = parseFloat(profitInput);
+    if (isNaN(val)) {
+      toast.error("请输入有效数字");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/bets/${bet.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ result: bet.result, profit: val }),
+      });
+      if (!res.ok) throw new Error("更新失败");
+      toast.success("盈利已更新");
+      setEditingProfitId(null);
+      setProfitInput("");
+      onRefresh();
+    } catch {
+      toast.error("更新盈利失败");
     }
   };
 
@@ -149,167 +307,258 @@ export function BetList({ bets, users, onRefresh, filter }: BetListProps) {
     );
   };
 
-  return (
-    <div className="rounded-lg border bg-white">
-      {/* Desktop: 表格 */}
-      <div className="hidden md:block overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>用户</TableHead>
-              <TableHead>
-                <div className="flex items-center gap-1">
-                  比赛
-                  <button
-                    onClick={fetchMatchData}
-                    className="text-gray-400 hover:text-blue-500 transition-colors ml-1"
-                    title="刷新比分"
-                  >
-                    <RefreshCw className={`h-3 w-3 ${matchesLoading ? "animate-spin" : ""}`} />
-                  </button>
-                </div>
-              </TableHead>
-              <TableHead>投注项</TableHead>
-              <TableHead className="text-right">投注额</TableHead>
-              <TableHead className="text-right">可赢</TableHead>
-              <TableHead className="text-center">结果</TableHead>
-              <TableHead className="text-right">盈利</TableHead>
-              <TableHead className="text-center">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredBets.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                  暂无投注记录
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredBets.map((bet) => (
-                <TableRow key={bet.id}>
-                  <TableCell className="font-medium text-sm whitespace-nowrap">
-                    {userMap.get(bet.userId) || "未知"}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium text-sm leading-snug">{bet.match}</span>
-                      <ScoreBadge matchId={bet.matchId} />
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <BetOptionBadge option={bet.betOption} />
-                  </TableCell>
-                  <TableCell className="text-right whitespace-nowrap">¥{bet.betAmount.toFixed(2)}</TableCell>
-                  <TableCell className="text-right text-blue-600 whitespace-nowrap">¥{bet.odds.toFixed(2)}</TableCell>
-                  <TableCell className="text-center">
-                    <Badge variant="secondary" className={resultConfig[bet.result]?.color || ""}>
-                      {resultConfig[bet.result]?.icon}
-                      <span className="ml-1">{resultConfig[bet.result]?.label}</span>
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right whitespace-nowrap">
-                    {bet.profit !== null ? (
-                      <span className={bet.profit >= 0 ? "text-green-600 font-semibold" : "text-red-600 font-semibold"}>
-                        {bet.profit >= 0 ? "+" : ""}
-                        ¥{(bet.result === "win" ? bet.profit + bet.betAmount : bet.profit).toFixed(2)}
-                      </span>
-                    ) : (
-                      "-"
-                    )}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-green-600" onClick={() => handleSetResult(bet.id, "win")} title="标记为赢">
-                        <Trophy className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-red-600" onClick={() => handleSetResult(bet.id, "loss")} title="标记为输">
-                        <XCircle className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-gray-500" onClick={() => handleSetResult(bet.id, "pending")} title="标记为待定">
-                        <Minus className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-red-500" onClick={() => handleDelete(bet.id)} title="删除">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      {/* Mobile: 卡片列表 */}
-      <div className="md:hidden">
-        {filteredBets.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">暂无投注记录</div>
+  // ===== 桌面端：单行投注渲染 =====
+  const renderBetRow = (bet: Bet) => (
+    <TableRow key={bet.id}>
+      <TableCell className="font-medium text-sm whitespace-nowrap">
+        {userMap.get(bet.userId) || "未知"}
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium text-sm leading-snug">{bet.match}</span>
+          <ScoreBadge matchId={bet.matchId} />
+        </div>
+      </TableCell>
+      <TableCell>
+        <BetOptionBadge option={bet.betOption} />
+      </TableCell>
+      <TableCell className="text-right whitespace-nowrap">¥{bet.betAmount.toFixed(2)}</TableCell>
+      <TableCell className="text-right text-blue-600 whitespace-nowrap">¥{bet.odds.toFixed(2)}</TableCell>
+      <TableCell className="text-center">
+        <Badge variant="secondary" className={resultConfig[bet.result]?.color || ""}>
+          {resultConfig[bet.result]?.icon}
+          <span className="ml-1">{resultConfig[bet.result]?.label}</span>
+        </Badge>
+      </TableCell>
+      <TableCell className="text-right whitespace-nowrap">
+        {editingProfitId === bet.id ? (
+          <div className="flex items-center gap-1 justify-end">
+            <input
+              type="number"
+              step="0.01"
+              value={profitInput}
+              onChange={(e) => setProfitInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveProfit(bet);
+                if (e.key === "Escape") handleCancelEditProfit();
+              }}
+              className="w-20 h-7 rounded border border-blue-400 px-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+              autoFocus
+            />
+            <button
+              onClick={() => handleSaveProfit(bet)}
+              className="text-green-600 hover:text-green-700 p-0.5"
+              title="保存"
+            >
+              <Check className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleCancelEditProfit}
+              className="text-gray-400 hover:text-gray-600 p-0.5"
+              title="取消"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ) : bet.profit !== null ? (
+          <div className="flex items-center justify-end gap-1">
+            <span className={bet.profit >= 0 ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}>
+              {bet.profit >= 0 ? "+" : ""}
+              ¥{bet.profit.toFixed(2)}
+            </span>
+            <button
+              onClick={() => handleStartEditProfit(bet)}
+              className="text-gray-300 hover:text-blue-500 p-0.5"
+              title="修改盈利"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          </div>
         ) : (
-          filteredBets.map((bet) => (
-            <div key={bet.id} className="border-b last:border-b-0 p-4 space-y-3">
-              {/* 顶部：用户 + 结果标签 + 盈利 */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-sm">{userMap.get(bet.userId) || "未知"}</span>
-                  <Badge variant="secondary" className={resultConfig[bet.result]?.color || ""}>
-                    {resultConfig[bet.result]?.icon}
-                    <span className="ml-1">{resultConfig[bet.result]?.label}</span>
-                  </Badge>
-                </div>
-                <div className="text-right">
-                  {bet.profit !== null ? (
-                    <span className={bet.profit >= 0 ? "text-green-600 font-semibold" : "text-red-600 font-semibold"}>
-                      {bet.profit >= 0 ? "+" : ""}
-                      ¥{(bet.result === "win" ? bet.profit + bet.betAmount : bet.profit).toFixed(2)}
-                    </span>
-                  ) : (
-                    <span className="text-gray-400">-</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 比赛名称 + 比分 */}
-              <div>
-                <div className="font-medium text-gray-900 text-sm">{bet.match}</div>
-                <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                  <ScoreBadge matchId={bet.matchId} />
-                  <BetOptionBadge option={bet.betOption} />
-                </div>
-              </div>
-
-              {/* 金额信息 */}
-              <div className="grid grid-cols-2 gap-2 text-sm text-gray-600">
-                <div>
-                  <span className="text-gray-400">投注:</span> ¥{bet.betAmount.toFixed(2)}
-                </div>
-                <div>
-                  <span className="text-gray-400">可赢:</span> <span className="text-blue-600">¥{bet.odds.toFixed(2)}</span>
-                </div>
-              </div>
-
-              {/* 操作按钮 */}
-              <div className="flex items-center gap-1 pt-1">
-                <Button variant="ghost" size="sm" className="h-8 px-2 text-green-600 flex-1" onClick={() => handleSetResult(bet.id, "win")}>
-                  <Trophy className="h-4 w-4 mr-1" />
-                  赢
-                </Button>
-                <Button variant="ghost" size="sm" className="h-8 px-2 text-red-600 flex-1" onClick={() => handleSetResult(bet.id, "loss")}>
-                  <XCircle className="h-4 w-4 mr-1" />
-                  输
-                </Button>
-                <Button variant="ghost" size="sm" className="h-8 px-2 text-gray-500 flex-1" onClick={() => handleSetResult(bet.id, "pending")}>
-                  <Minus className="h-4 w-4 mr-1" />
-                  待定
-                </Button>
-                <Button variant="ghost" size="sm" className="h-8 px-2 text-red-500 flex-1" onClick={() => handleDelete(bet.id)}>
-                  <Trash2 className="h-4 w-4 mr-1" />
-                  删除
-                </Button>
-              </div>
-            </div>
-          ))
+          <span className="text-gray-400">-</span>
         )}
+      </TableCell>
+      <TableCell className="text-center">
+        <div className="flex items-center justify-center gap-1">
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-green-600" onClick={() => handleSetResult(bet.id, "win")} title="标记为赢">
+            <Trophy className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-red-600" onClick={() => handleSetResult(bet.id, "loss")} title="标记为输">
+            <XCircle className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-gray-500" onClick={() => handleSetResult(bet.id, "pending")} title="标记为待定">
+            <Minus className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-red-500" onClick={() => handleDelete(bet.id)} title="删除">
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+
+  // ===== 移动端：单条投注卡片渲染 =====
+  const renderBetCard = (bet: Bet) => (
+    <div key={bet.id} className="border-b last:border-b-0 p-4 space-y-3">
+      {/* 顶部：用户 + 结果标签 + 盈利 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-sm">{userMap.get(bet.userId) || "未知"}</span>
+          <Badge variant="secondary" className={resultConfig[bet.result]?.color || ""}>
+            {resultConfig[bet.result]?.icon}
+            <span className="ml-1">{resultConfig[bet.result]?.label}</span>
+          </Badge>
+        </div>
+        <div className="text-right">
+          {editingProfitId === bet.id ? (
+            <div className="flex items-center gap-1 justify-end">
+              <input
+                type="number"
+                step="0.01"
+                value={profitInput}
+                onChange={(e) => setProfitInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveProfit(bet);
+                  if (e.key === "Escape") handleCancelEditProfit();
+                }}
+                className="w-20 h-8 rounded border border-blue-400 px-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-blue-400"
+                autoFocus
+              />
+              <button
+                onClick={() => handleSaveProfit(bet)}
+                className="text-green-600 hover:text-green-700 p-1"
+                title="保存"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <button
+                onClick={handleCancelEditProfit}
+                className="text-gray-400 hover:text-gray-600 p-1"
+                title="取消"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : bet.profit !== null ? (
+            <div className="flex items-center justify-end gap-1">
+              <span
+                className={bet.profit >= 0 ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}
+                onClick={() => handleStartEditProfit(bet)}
+              >
+                {bet.profit >= 0 ? "+" : ""}
+                ¥{bet.profit.toFixed(2)}
+              </span>
+              <button
+                onClick={() => handleStartEditProfit(bet)}
+                className="text-gray-300 hover:text-blue-500 p-0.5"
+                title="修改盈利"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
+          ) : (
+            <span className="text-gray-400">-</span>
+          )}
+        </div>
       </div>
+
+      {/* 比赛名称 + 比分 */}
+      <div>
+        <div className="font-medium text-gray-900 text-sm">{bet.match}</div>
+        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+          <ScoreBadge matchId={bet.matchId} />
+          <BetOptionBadge option={bet.betOption} />
+        </div>
+      </div>
+
+      {/* 金额信息 */}
+      <div className="grid grid-cols-2 gap-2 text-sm text-gray-600">
+        <div>
+          <span className="text-gray-400">投注:</span> ¥{bet.betAmount.toFixed(2)}
+        </div>
+        <div>
+          <span className="text-gray-400">可赢:</span> <span className="text-blue-600">¥{bet.odds.toFixed(2)}</span>
+        </div>
+      </div>
+
+      {/* 操作按钮 */}
+      <div className="flex items-center gap-1 pt-1">
+        <Button variant="ghost" size="sm" className="h-8 px-2 text-green-600 flex-1" onClick={() => handleSetResult(bet.id, "win")}>
+          <Trophy className="h-4 w-4 mr-1" />
+          赢
+        </Button>
+        <Button variant="ghost" size="sm" className="h-8 px-2 text-red-600 flex-1" onClick={() => handleSetResult(bet.id, "loss")}>
+          <XCircle className="h-4 w-4 mr-1" />
+          输
+        </Button>
+        <Button variant="ghost" size="sm" className="h-8 px-2 text-gray-500 flex-1" onClick={() => handleSetResult(bet.id, "pending")}>
+          <Minus className="h-4 w-4 mr-1" />
+          待定
+        </Button>
+        <Button variant="ghost" size="sm" className="h-8 px-2 text-red-500 flex-1" onClick={() => handleDelete(bet.id)}>
+          <Trash2 className="h-4 w-4 mr-1" />
+          删除
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (filteredBets.length === 0) {
+    return (
+      <div className="rounded-lg border bg-white">
+        <div className="text-center py-8 text-muted-foreground">暂无投注记录</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {groupedDays.map((group) => {
+        const stats = computeDayStats(group.bets);
+        return (
+          <div key={group.dateKey} className="rounded-lg border bg-white overflow-hidden">
+            {/* 日汇总头部 */}
+            <DayHeader dateKey={group.dateKey} stats={stats} />
+
+            {/* 桌面端：表格 */}
+            <div className="hidden md:block overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-gray-50/50">
+                    <TableHead className="h-9">用户</TableHead>
+                    <TableHead>
+                      <div className="flex items-center gap-1">
+                        比赛
+                        <button
+                          onClick={fetchMatchData}
+                          className="text-gray-400 hover:text-blue-500 transition-colors ml-1"
+                          title="刷新比分"
+                        >
+                          <RefreshCw className={`h-3 w-3 ${matchesLoading ? "animate-spin" : ""}`} />
+                        </button>
+                      </div>
+                    </TableHead>
+                    <TableHead className="h-9">投注项</TableHead>
+                    <TableHead className="text-right h-9">投注额</TableHead>
+                    <TableHead className="text-right h-9">可赢</TableHead>
+                    <TableHead className="text-center h-9">结果</TableHead>
+                    <TableHead className="text-right h-9">盈利</TableHead>
+                    <TableHead className="text-center h-9">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {group.bets.map(renderBetRow)}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* 移动端：卡片列表 */}
+            <div className="md:hidden">
+              {group.bets.map(renderBetCard)}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

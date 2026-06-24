@@ -18,17 +18,6 @@ function recordBalanceChange(
   ).run(userId, changeAmount, user.balance, newBalance, type, reason, betId ?? null);
 }
 
-// odds 字段存储的是 winAmount（可赢金额）
-function calculateProfit(betAmount: number, winAmount: number, result: string): number | null {
-  if (result === "win") {
-    return winAmount; // 盈利 = 可赢金额
-  }
-  if (result === "loss") {
-    return -betAmount; // 亏损 = 投注额
-  }
-  return null;
-}
-
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -36,7 +25,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { result } = body;
+    const { result, profit: customProfit } = body;
 
     if (!result || !["win", "loss", "pending"].includes(result)) {
       return NextResponse.json(
@@ -46,59 +35,67 @@ export async function PUT(
     }
 
     const existing = db.prepare("SELECT * FROM Bet WHERE id = ?").get(Number(id)) as
-      { betAmount: number; odds: number; result: string; userId: number; match: string } | undefined;
+      { betAmount: number; odds: number; result: string; profit: number | null; userId: number; match: string } | undefined;
 
     if (!existing) {
       return NextResponse.json({ error: "投注记录不存在" }, { status: 404 });
     }
 
     const oldResult = existing.result;
+    const oldProfit = existing.profit;
     const newResult = result;
-    // odds 字段存储 winAmount（可赢金额）
     const { betAmount, odds: winAmount, userId, match } = existing;
 
-    // 如果结果没有变化，直接返回
-    if (oldResult === newResult) {
+    // 计算新的 profit
+    let newProfit: number | null;
+    if (newResult === "pending") {
+      newProfit = null;
+    } else if (customProfit != null && !isNaN(Number(customProfit))) {
+      newProfit = Number(customProfit);
+    } else {
+      newProfit = newResult === "win" ? winAmount : -betAmount;
+    }
+
+    // 如果结果和 profit 都没变化，直接返回
+    if (oldResult === newResult && oldProfit === newProfit) {
       const unchanged = db.prepare("SELECT * FROM Bet WHERE id = ?").get(Number(id));
       return NextResponse.json(unchanged);
     }
 
-    // 根据状态转移计算余额变化
-    // 赢时：返还 betAmount + winAmount；输时：不操作（本金已在投注时扣除）
-    let balanceChange = 0;
-    if (oldResult === "pending" && newResult === "win") {
-      balanceChange = betAmount + winAmount; // 返还本金+可赢金额
-    } else if (oldResult === "pending" && newResult === "loss") {
-      balanceChange = 0; // 输了不返还
-    } else if (oldResult === "win" && newResult === "pending") {
-      balanceChange = -(betAmount + winAmount); // 撤销赢：扣回
-    } else if (oldResult === "loss" && newResult === "pending") {
-      balanceChange = 0; // 撤销输：不变（本金已扣）
-    } else if (oldResult === "win" && newResult === "loss") {
-      balanceChange = -(betAmount + winAmount); // 从赢到输：扣回
-    } else if (oldResult === "loss" && newResult === "win") {
-      balanceChange = betAmount + winAmount; // 从输到赢：返还
+    // 统一余额变动计算：balanceChange = betAmount + profit
+    // - 赢时 profit > 0：返还本金 + 盈利
+    // - 输时 profit < 0：返还本金 + 亏损（如 profit = -50, 返还 betAmount-50）
+    // - 待定 profit = null：无变动
+    let oldBalanceChange = 0;
+    if (oldResult === "win" || oldResult === "loss") {
+      oldBalanceChange = betAmount + (oldProfit ?? 0);
     }
 
-    if (balanceChange !== 0) {
-      db.prepare("UPDATE User SET balance = balance + ? WHERE id = ?")
-        .run(balanceChange, userId);
+    let newBalanceChange = 0;
+    if (newResult === "win" || newResult === "loss") {
+      newBalanceChange = betAmount + (newProfit ?? 0);
+    }
 
-      const resultLabel = newResult === "win" ? "赢" : "输";
+    const netBalanceChange = newBalanceChange - oldBalanceChange;
+
+    if (netBalanceChange !== 0) {
+      db.prepare("UPDATE User SET balance = balance + ? WHERE id = ?")
+        .run(netBalanceChange, userId);
+
+      const resultLabel = newResult === "win" ? "赢" : newResult === "loss" ? "输" : "待定";
       const oldLabel = oldResult === "pending" ? "待定" : oldResult === "win" ? "赢" : "输";
+      const profitNote = customProfit != null ? `（手动调整盈利 ¥${newProfit?.toFixed(2)}）` : "";
       recordBalanceChange(
         userId,
-        balanceChange,
+        netBalanceChange,
         "bet_result",
-        `《${match}》结果从「${oldLabel}」改为「${resultLabel}」，余额变动 ¥${balanceChange.toFixed(2)}`,
+        `《${match}》结果从「${oldLabel}」改为「${resultLabel}」${profitNote}，余额变动 ¥${netBalanceChange.toFixed(2)}`,
         Number(id)
       );
     }
 
-    const profit = calculateProfit(betAmount, winAmount, newResult);
-
     db.prepare("UPDATE Bet SET result = ?, profit = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(newResult, profit, Number(id));
+      .run(newResult, newProfit, Number(id));
 
     const updated = db.prepare("SELECT * FROM Bet WHERE id = ?").get(Number(id));
 

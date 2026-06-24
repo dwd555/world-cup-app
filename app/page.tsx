@@ -14,12 +14,15 @@ import { Trophy, BookOpen, History } from "lucide-react";
 interface Bet {
   id: number;
   match: string;
+  matchId: string | null;
+  betOption: string | null;
   betAmount: number;
   odds: number;
   result: string;
   profit: number | null;
   userId: number;
   createdAt: string;
+  updatedAt: string;
 }
 
 interface User {

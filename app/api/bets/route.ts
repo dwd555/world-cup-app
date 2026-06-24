@@ -46,9 +46,9 @@ export async function POST(request: Request) {
     const { match, matchId, betOption, betAmount, winAmount, odds, userId } = body;
     const effectiveWinAmount = winAmount != null ? winAmount : odds;
 
-    if (!match || betAmount == null || effectiveWinAmount == null || !userId) {
+    if (betAmount == null || effectiveWinAmount == null || !userId) {
       return NextResponse.json(
-        { error: "缺少必要字段: match, betAmount, winAmount, userId" },
+        { error: "缺少必要字段: betAmount, winAmount, userId" },
         { status: 400 }
       );
     }
@@ -75,11 +75,12 @@ export async function POST(request: Request) {
       .run(amount, uid);
 
     // 记录余额变更
+    const matchDesc = match ? `投注《${match}》，` : "自定义投注，";
     recordBalanceChange(
       uid,
       -amount,
       "bet_create",
-      `投注《${match}》，扣除本金 ¥${amount.toFixed(2)}`
+      `${matchDesc}扣除本金 ¥${amount.toFixed(2)}`
     );
 
     // odds 字段存储 winAmount（可赢金额）
@@ -87,7 +88,8 @@ export async function POST(request: Request) {
       "INSERT INTO Bet (match, matchId, betOption, betAmount, odds, result, userId) VALUES (?, ?, ?, ?, ?, 'pending', ?)"
     );
     const result = stmt.run(
-      String(match),
+      match ? String(match) : "",
+      matchId ? String(matchId) : null,
       matchId ? String(matchId) : null,
       betOption ? String(betOption) : null,
       amount,
